@@ -24,7 +24,9 @@ export default function CollectPage() {
   const [error, setError] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
 
-  useEffect(() => bottom.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   async function send() {
     const text = input.trim();
