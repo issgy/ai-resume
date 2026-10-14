@@ -1,15 +1,15 @@
 @import "tailwindcss";
 
 @theme {
-  --color-paper: #f6f6fb;
+  --color-paper: #fafaf7;
   --color-card: #ffffff;
-  --color-ink: #0f0f1a;
-  --color-ink-soft: #3d3d52;
-  --color-muted: #8b8ba3;
-  --color-line: #e6e6f0;
-  --color-accent: #5b4cf0;
-  --color-accent-2: #a855f7;
-  --color-accent-soft: #eeecff;
+  --color-ink: #1c2422;
+  --color-ink-soft: #3f4a47;
+  --color-muted: #66716d;
+  --color-line: #e4e7e1;
+  --color-accent: #0f766e;
+  --color-accent-2: #0d9488;
+  --color-accent-soft: #e6f4f1;
   --color-accent-ink: #ffffff;
   --color-warn: #b45309;
   --font-display: "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
@@ -28,7 +28,7 @@ body {
 }
 
 /* 品牌渐变 */
-.bg-brand { background-image: linear-gradient(135deg, var(--color-accent), var(--color-accent-2)); }
+.bg-brand { background-image: linear-gradient(135deg, var(--color-accent), #115e59); }
 .text-brand {
   background-image: linear-gradient(135deg, var(--color-accent), var(--color-accent-2));
   -webkit-background-clip: text;
@@ -36,11 +36,11 @@ body {
   color: transparent;
 }
 
-/* 背景细噪点 + 柔和光斑，营造纸张质感 */
+/* 柔和光斑，营造纸张质感 */
 .bg-grain {
   background-image:
-    radial-gradient(60rem 30rem at 85% -10%, rgb(124 92 255 / 0.18), transparent 60%),
-    radial-gradient(40rem 24rem at -10% 10%, rgb(168 85 247 / 0.10), transparent 60%);
+    radial-gradient(60rem 30rem at 85% -10%, rgb(13 148 136 / 0.10), transparent 60%),
+    radial-gradient(40rem 24rem at -10% 10%, rgb(236 253 245 / 0.9), transparent 60%);
 }
 
 .field {
@@ -56,7 +56,7 @@ body {
 .field:focus {
   outline: none;
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 4px rgb(91 76 240 / 0.15);
+  box-shadow: 0 0 0 4px rgb(15 118 110 / 0.15);
 }
 
 @keyframes rise {

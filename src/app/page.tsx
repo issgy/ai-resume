@@ -15,7 +15,7 @@ export default function Home() {
         <div className="space-y-7">
           <span className="inline-flex items-center gap-2 rounded-full border border-line bg-card px-3 py-1 text-xs font-medium text-ink-soft">
             <span className="bg-brand h-1.5 w-1.5 rounded-full" />
-            可辩护的 JD 匹配器
+            有据简历 · 粘贴 JD，生成每句都有出处的简历
           </span>
           <h1 className="font-display text-5xl font-bold leading-[1.05] tracking-tight sm:text-6xl lg:text-7xl">
             每条亮点
@@ -28,7 +28,7 @@ export default function Home() {
           <div className="flex flex-wrap items-center gap-3">
             <Link
               href="/collect"
-              className="bg-brand inline-flex items-center gap-2 rounded-full px-6 py-3 text-sm font-medium text-white shadow-[0_12px_30px_-10px_rgb(91_76_240/0.7)] transition hover:brightness-110"
+              className="bg-brand inline-flex items-center gap-2 rounded-full px-6 py-3 text-sm font-medium text-white shadow-[0_12px_30px_-10px_rgb(15_118_110/0.7)] transition hover:brightness-110"
             >
               开始录入 <span aria-hidden>→</span>
             </Link>
@@ -42,7 +42,7 @@ export default function Home() {
         {/* 示意卡片：亮点 ↔ 原话 */}
         <div className="relative">
           <div className="bg-brand absolute -inset-4 -z-10 rounded-[2.5rem] opacity-20 blur-3xl" />
-          <div className="space-y-3 rounded-[2rem] border border-line bg-card/90 p-5 shadow-[0_30px_80px_-30px_rgb(40_30_120/0.35)] backdrop-blur">
+          <div className="space-y-3 rounded-[2rem] border border-line bg-card/90 p-5 shadow-[0_30px_80px_-30px_rgb(20_40_35/0.35)] backdrop-blur">
             <div className="flex items-center justify-between text-xs text-muted">
               <span>简历亮点</span>
               <span className="rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700">已校验</span>

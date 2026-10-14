@@ -3,8 +3,8 @@ import { Nav } from "@/components/nav";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AI 简历 · 可辩护的 JD 匹配器",
-  description: "一次录入真实经历，粘贴 JD 定向生成简历，每条亮点都能应对面试追问",
+  title: "有据简历 · 粘贴 JD，生成每句都有出处的简历",
+  description: "有据简历：一次录入真实经历，粘贴 JD 定向生成简历，每句都能追溯到你的原话，并附面试追问",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

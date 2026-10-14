@@ -58,7 +58,7 @@ export default function ResumePage() {
       </Card>
 
       {/* 简历正文：屏幕和打印共用 */}
-      <article className="mx-auto max-w-[210mm] rounded-2xl border border-line bg-white p-10 shadow-[0_30px_80px_-40px_rgb(40_30_120/0.35)] print:max-w-none print:rounded-none print:border-0 print:p-0 print:shadow-none">
+      <article className="mx-auto max-w-[210mm] rounded-2xl border border-line bg-white p-10 shadow-[0_30px_80px_-40px_rgb(20_40_35/0.35)] print:max-w-none print:rounded-none print:border-0 print:p-0 print:shadow-none">
         <header className="mb-5 border-b border-slate-300 pb-4">
           <h1 className="text-3xl font-bold tracking-tight">{profile.name || "你的姓名"}</h1>
           <p className="mt-1 text-sm text-slate-600">

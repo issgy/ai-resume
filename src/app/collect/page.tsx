@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Card, ErrorText, PageHeader, postJson } from "@/components/ui";
+import { Logo } from "@/components/logo";
 import { KEYS, uid, useStored } from "@/lib/storage";
 import type { ChatMessage, Experience } from "@/lib/types";
 
@@ -104,7 +105,7 @@ export default function CollectPage() {
 
       <Card className="!p-0 overflow-hidden">
         <div className="flex items-center gap-3 border-b border-line px-5 py-3">
-          <span className="bg-brand grid h-8 w-8 place-items-center rounded-full text-xs font-bold text-white">AI</span>
+          <span className="grid h-9 w-9 place-items-center rounded-full bg-accent-soft"><Logo size={22} /></span>
           <div className="leading-tight">
             <div className="text-sm font-semibold">简历顾问</div>
             <div className="text-xs text-muted">{streaming ? "正在输入…" : "在线"}</div>
@@ -115,12 +116,12 @@ export default function CollectPage() {
           {messages.map((m, i) => (
             <div key={i} className={`flex items-end gap-2 ${m.role === "user" ? "justify-end" : ""}`}>
               {m.role === "assistant" && (
-                <span className="bg-brand mb-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white">AI</span>
+                <span className="mb-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-accent-soft"><Logo size={18} /></span>
               )}
               <span
                 className={`inline-block max-w-[78%] whitespace-pre-wrap px-4 py-2.5 text-sm leading-relaxed ${
                   m.role === "user"
-                    ? "bg-brand rounded-2xl rounded-br-md text-white shadow-[0_8px_20px_-10px_rgb(91_76_240/0.7)]"
+                    ? "bg-brand rounded-2xl rounded-br-md text-white shadow-[0_8px_20px_-10px_rgb(15_118_110/0.7)]"
                     : "rounded-2xl rounded-bl-md border border-line bg-card text-ink"
                 }`}
               >

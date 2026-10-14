@@ -5,7 +5,7 @@ type Variant = "primary" | "accent" | "ghost" | "danger";
 export function Button({ className = "", variant = "primary", ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant }) {
   const styles = {
     primary: "bg-ink text-white hover:bg-ink-soft",
-    accent: "bg-brand text-white shadow-[0_8px_24px_-8px_rgb(91_76_240/0.6)] hover:brightness-110",
+    accent: "bg-brand text-white shadow-[0_8px_24px_-8px_rgb(15_118_110/0.6)] hover:brightness-110",
     ghost: "border border-line bg-card text-ink hover:border-ink",
     danger: "border border-red-200 bg-card text-red-600 hover:bg-red-50",
   }[variant];
@@ -18,7 +18,7 @@ export function Button({ className = "", variant = "primary", ...props }: Button
 }
 
 export function Card({ className = "", children }: { className?: string; children: ReactNode }) {
-  return <div className={`rounded-3xl border border-line bg-card p-5 shadow-[0_10px_40px_-20px_rgb(40_30_120/0.25)] sm:p-6 ${className}`}>{children}</div>;
+  return <div className={`rounded-3xl border border-line bg-card p-5 shadow-[0_10px_40px_-20px_rgb(20_40_35/0.25)] sm:p-6 ${className}`}>{children}</div>;
 }
 
 /** 页面标题区：步骤号 + 大标题 + 说明 + 右侧操作 */
