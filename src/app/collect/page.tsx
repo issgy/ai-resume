@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button, Card, ErrorText, PageHeader, postJson } from "@/components/ui";
+import { Button, Card, ErrorText, PageHeader, httpError, postJson } from "@/components/ui";
 import { Logo } from "@/components/logo";
 import { KEYS, uid, useStored } from "@/lib/storage";
 import type { ChatMessage, Experience } from "@/lib/types";
@@ -43,7 +43,11 @@ export default function CollectPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: next }),
       });
-      if (!res.ok || !res.body) throw new Error(await res.text());
+      if (!res.ok || !res.body) {
+        // 我们自己的路由返回纯文本错误；平台层（如 504）返回 HTML，统一换成可读提示
+        const text = res.headers.get("content-type")?.startsWith("text/plain") ? await res.text() : "";
+        throw new Error(text || httpError(res.status));
+      }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let reply = "";
@@ -54,8 +58,11 @@ export default function CollectPage() {
         setMessages([...next, { role: "assistant", content: reply }]);
       }
     } catch (e) {
-      setError((e as Error).message || "对话失败");
-      setMessages(next);
+      // 流式输出中途断开时浏览器只给出 TypeError，换成可读提示
+      setError(e instanceof TypeError ? "连接中断或模型响应超时，请重试" : (e as Error).message || "对话失败");
+      // 撤回这条发言并放回输入框，用户可以直接重发
+      setMessages(messages);
+      setInput(text);
     } finally {
       setStreaming(false);
     }

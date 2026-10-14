@@ -14,20 +14,39 @@ function headers() {
   return { "Content-Type": "application/json", Authorization: `Bearer ${key}` };
 }
 
-async function post(body: Record<string, unknown>) {
-  const res = await fetch(`${BASE_URL.replace(/\/$/, "")}/chat/completions`, {
-    method: "POST",
-    headers: headers(),
-    body: JSON.stringify({ model: MODEL, ...body }),
-  });
-  if (!res.ok) throw new Error(`模型调用失败 ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  return res;
+/** 模型调用超时：要小于路由的 maxDuration(60s)，超时后返回清晰错误，而不是被平台以 504 掐断 */
+const TIMEOUT_MS = 50_000;
+const TIMEOUT_MSG = "模型响应超时，请稍后重试";
+
+async function post(body: Record<string, unknown>, signal: AbortSignal) {
+  try {
+    const res = await fetch(`${BASE_URL.replace(/\/$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ model: MODEL, ...body }),
+      signal,
+    });
+    if (!res.ok) throw new Error(`模型调用失败 ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    return res;
+  } catch (e) {
+    if (signal.aborted) throw new Error(TIMEOUT_MSG);
+    throw e;
+  }
 }
 
 export async function callLLM(messages: LLMMessage[], temperature = 0.3): Promise<string> {
-  const res = await post({ messages, temperature });
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content ?? "";
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  try {
+    const res = await post({ messages, temperature }, controller.signal);
+    const data = await res.json();
+    return data.choices?.[0]?.message?.content ?? "";
+  } catch (e) {
+    if (controller.signal.aborted) throw new Error(TIMEOUT_MSG);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** 调用模型并把回复解析为 JSON（容忍 ```json 包裹和前后多余文字） */
@@ -47,17 +66,35 @@ export function parseJson<T>(text: string): T {
 
 /** 流式调用，返回纯文本流（把上游 SSE 解析成增量文本） */
 export async function streamLLM(messages: LLMMessage[], temperature = 0.5): Promise<ReadableStream<Uint8Array>> {
-  const res = await post({ messages, temperature, stream: true });
+  // 整个流（含首字节前的等待）共用一个超时，超时后中止上游请求并结束输出
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await post({ messages, temperature, stream: true }, controller.signal);
+  } catch (e) {
+    clearTimeout(timer);
+    throw e;
+  }
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let buffer = "";
 
   return new ReadableStream({
-    async pull(controller) {
-      const { done, value } = await reader.read();
+    async pull(out) {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (e) {
+        clearTimeout(timer);
+        out.error(controller.signal.aborted ? new Error(TIMEOUT_MSG) : e);
+        return;
+      }
+      const { done, value } = chunk;
       if (done) {
-        controller.close();
+        clearTimeout(timer);
+        out.close();
         return;
       }
       buffer += decoder.decode(value, { stream: true });
@@ -70,13 +107,14 @@ export async function streamLLM(messages: LLMMessage[], temperature = 0.5): Prom
         if (payload === "[DONE]") continue;
         try {
           const delta = JSON.parse(payload).choices?.[0]?.delta?.content;
-          if (delta) controller.enqueue(encoder.encode(delta));
+          if (delta) out.enqueue(encoder.encode(delta));
         } catch {
           // 忽略不完整的行
         }
       }
     },
     cancel() {
+      clearTimeout(timer);
       reader.cancel();
     },
   });

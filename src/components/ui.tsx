@@ -45,9 +45,16 @@ export function ErrorText({ children }: { children: React.ReactNode }) {
   return <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{children}</p>;
 }
 
+/** 把平台层的错误码（如 Vercel 超时返回的 504 页面）翻译成用户能看懂的提示 */
+export function httpError(status: number) {
+  if (status === 504 || status === 524) return "模型响应超时，请重试（你的输入已保留）";
+  if (status === 429) return "请求太频繁，请稍等几秒再试";
+  return `请求失败 ${status}，请重试`;
+}
+
 export async function postJson<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  const data = await res.json().catch(() => ({ error: `请求失败 ${res.status}` }));
+  const data = await res.json().catch(() => ({ error: httpError(res.status) }));
   if (!res.ok || data.error) throw new Error(data.error ?? `请求失败 ${res.status}`);
   return data as T;
 }
