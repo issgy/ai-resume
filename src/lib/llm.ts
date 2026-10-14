@@ -10,7 +10,7 @@ export type LLMMessage = { role: "system" | "user" | "assistant"; content: strin
 
 function headers() {
   const key = process.env.LLM_API_KEY;
-  if (!key) throw new Error("未配置 LLM_API_KEY 环境变量");
+  if (!key) throw new Error("未配置 LLM_API_KEY：请复制 .env.example 为 .env.local 并在 .env.local 中填写 Key（.env.example 不会被读取），然后重启 npm run dev");
   return { "Content-Type": "application/json", Authorization: `Bearer ${key}` };
 }
 
