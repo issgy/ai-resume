@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button, ErrorText, postJson } from "@/components/ui";
+import { Button, Card, ErrorText, PageHeader, postJson } from "@/components/ui";
 import { KEYS, useStored } from "@/lib/storage";
 import type { Experience, MatchResult, Requirement, ResumeResult } from "@/lib/types";
 
@@ -48,66 +48,97 @@ export default function MatchPage() {
 
   const covered = match?.requirements.filter((r) => r.factIds.length > 0).length ?? 0;
 
+  const total = match?.requirements.length ?? 0;
+  const pct = total ? Math.round((covered / total) * 100) : 0;
+
   return (
-    <div className="space-y-4">
-      <h1 className="text-xl font-bold">JD 匹配</h1>
-      <textarea
-        className="w-full rounded border p-3 text-sm"
-        rows={8}
-        placeholder="粘贴目标岗位的完整 JD（岗位职责 + 任职要求）"
-        value={currentJd}
-        onChange={(e) => setJd(e.target.value)}
-      />
-      <Button onClick={runMatch} disabled={!!loading || !currentJd.trim()}>
-        {loading === "match" ? "分析中…" : "分析匹配"}
-      </Button>
+    <div className="space-y-6">
+      <PageHeader step="03" title="JD 匹配" desc="粘贴目标岗位的完整 JD，逐条对照你的履历库。没有对应经历的要求会标为缺口，绝不虚构。" />
+
+      <Card className="space-y-4">
+        <textarea
+          className="field resize-y !p-4 leading-relaxed"
+          rows={8}
+          placeholder="粘贴目标岗位的完整 JD（岗位职责 + 任职要求）"
+          value={currentJd}
+          onChange={(e) => setJd(e.target.value)}
+        />
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs text-muted">{currentJd.trim().length} 字</span>
+          <Button variant="accent" onClick={runMatch} disabled={!!loading || !currentJd.trim()}>
+            {loading === "match" ? "分析中…" : "分析匹配"}
+          </Button>
+        </div>
+      </Card>
       <ErrorText>{error}</ErrorText>
 
       {match && (
-        <div className="space-y-3 rounded border bg-white p-4">
-          <h2 className="font-semibold">
-            匹配表 <span className="text-sm font-normal text-slate-500">已覆盖 {covered} / {match.requirements.length} 条要求</span>
-          </h2>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b text-left text-slate-500">
-                <th className="w-2/5 py-2">JD 要求</th>
-                <th className="py-2">你的对应经历</th>
-              </tr>
-            </thead>
-            <tbody>
-              {match.requirements.map((r, i) => (
-                <tr key={i} className="border-b align-top">
-                  <td className="py-2 pr-3">
-                    <span className={`mr-1 rounded px-1 text-xs ${r.type === "must" ? "bg-slate-900 text-white" : "bg-slate-200"}`}>
-                      {r.type === "must" ? "必须" : "加分"}
-                    </span>
-                    {r.text}
-                  </td>
-                  <td className="py-2">
-                    {r.factIds.length === 0 ? (
-                      <span className="text-amber-700">缺口：履历库里没有对应经历，不会在简历中虚构</span>
+        <Card className="animate-rise space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold">匹配表</h2>
+              <p className="text-sm text-muted">已覆盖 {covered} / {total} 条要求</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <div
+                className="grid h-14 w-14 place-items-center rounded-full"
+                style={{ background: `conic-gradient(var(--color-accent) ${pct * 3.6}deg, var(--color-line) 0)` }}
+              >
+                <span className="grid h-11 w-11 place-items-center rounded-full bg-card text-sm font-bold">{pct}%</span>
+              </div>
+            </div>
+          </div>
+
+          <ul className="space-y-3">
+            {match.requirements.map((r, i) => {
+              const hit = r.factIds.length > 0;
+              return (
+                <li
+                  key={i}
+                  className={`grid gap-3 rounded-2xl border p-4 sm:grid-cols-[2fr_3fr] ${
+                    hit ? "border-emerald-200 bg-emerald-50/40" : "border-amber-200 bg-amber-50/40"
+                  }`}
+                >
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap gap-1.5">
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${r.type === "must" ? "bg-ink text-white" : "bg-accent-soft text-accent"}`}>
+                        {r.type === "must" ? "必须" : "加分"}
+                      </span>
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${hit ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}`}>
+                        {hit ? "✓ 已覆盖" : "缺口"}
+                      </span>
+                    </div>
+                    <div className="text-sm font-medium">{r.text}</div>
+                  </div>
+                  <div className="text-sm">
+                    {!hit ? (
+                      <span className="text-amber-800">履历库里没有对应经历，不会在简历中虚构</span>
                     ) : (
-                      <ul className="space-y-1">
+                      <ul className="space-y-1.5">
                         {r.factIds.map((id) => {
                           const f = factById.get(id);
                           return f ? (
-                            <li key={id}>
-                              {f.text} <span className="text-xs text-slate-400">· {f.exp.company}</span>
+                            <li key={id} className="flex gap-2">
+                              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+                              <span>
+                                {f.text} <span className="text-xs text-muted">· {f.exp.company}</span>
+                              </span>
                             </li>
                           ) : null;
                         })}
                       </ul>
                     )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <Button onClick={runResume} disabled={!!loading}>
-            {loading === "resume" ? "生成中，约需 20-40 秒…" : "生成定向简历 →"}
-          </Button>
-        </div>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="flex justify-end">
+            <Button variant="accent" className="!px-6 !py-3" onClick={runResume} disabled={!!loading}>
+              {loading === "resume" ? "生成中，约需 20-40 秒…" : "生成定向简历 →"}
+            </Button>
+          </div>
+        </Card>
       )}
     </div>
   );

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button, ErrorText, postJson } from "@/components/ui";
+import { Button, Card, ErrorText, PageHeader, postJson } from "@/components/ui";
 import { KEYS, uid, useStored } from "@/lib/storage";
 import type { ChatMessage, Experience } from "@/lib/types";
 
@@ -90,62 +90,84 @@ export default function CollectPage() {
   const userTurns = messages.filter((m) => m.role === "user").length;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">录入经历</h1>
-        <Button variant="ghost" onClick={() => { setMessages([GREETING]); setDraft(null); }} disabled={streaming}>
-          重新开始这段
-        </Button>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        step="01"
+        title="录入经历"
+        desc="像聊天一样讲一段经历，AI 会追问细节和数字。回答两轮以上就可以整理入库。"
+        actions={
+          <Button variant="ghost" onClick={() => { setMessages([GREETING]); setDraft(null); }} disabled={streaming}>
+            重新开始这段
+          </Button>
+        }
+      />
 
-      <div className="h-[55vh] space-y-3 overflow-y-auto rounded border bg-white p-4">
-        {messages.map((m, i) => (
-          <div key={i} className={m.role === "user" ? "text-right" : ""}>
-            <span
-              className={`inline-block max-w-[85%] whitespace-pre-wrap rounded-lg px-3 py-2 text-left text-sm ${
-                m.role === "user" ? "bg-slate-900 text-white" : "bg-slate-100"
-              }`}
-            >
-              {m.content || "…"}
-            </span>
+      <Card className="!p-0 overflow-hidden">
+        <div className="flex items-center gap-3 border-b border-line px-5 py-3">
+          <span className="bg-brand grid h-8 w-8 place-items-center rounded-full text-xs font-bold text-white">AI</span>
+          <div className="leading-tight">
+            <div className="text-sm font-semibold">简历顾问</div>
+            <div className="text-xs text-muted">{streaming ? "正在输入…" : "在线"}</div>
           </div>
-        ))}
-        <div ref={bottom} />
-      </div>
+        </div>
+
+        <div className="h-[52vh] space-y-4 overflow-y-auto bg-paper/50 px-5 py-6">
+          {messages.map((m, i) => (
+            <div key={i} className={`flex items-end gap-2 ${m.role === "user" ? "justify-end" : ""}`}>
+              {m.role === "assistant" && (
+                <span className="bg-brand mb-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white">AI</span>
+              )}
+              <span
+                className={`inline-block max-w-[78%] whitespace-pre-wrap px-4 py-2.5 text-sm leading-relaxed ${
+                  m.role === "user"
+                    ? "bg-brand rounded-2xl rounded-br-md text-white shadow-[0_8px_20px_-10px_rgb(91_76_240/0.7)]"
+                    : "rounded-2xl rounded-bl-md border border-line bg-card text-ink"
+                }`}
+              >
+                {m.content || <span className="inline-flex gap-1 py-1"><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted [animation-delay:120ms]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted [animation-delay:240ms]" /></span>}
+              </span>
+            </div>
+          ))}
+          <div ref={bottom} />
+        </div>
+
+        <div className="flex items-end gap-2 border-t border-line p-3">
+          <textarea
+            className="field flex-1 resize-none !rounded-2xl !border-transparent !bg-paper"
+            rows={2}
+            placeholder="如实描述就好，Enter 发送，Shift+Enter 换行"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                send();
+              }
+            }}
+          />
+          <div className="flex flex-col gap-2">
+            <Button variant="accent" onClick={send} disabled={streaming || !input.trim()}>发送 ↑</Button>
+            <Button variant="ghost" onClick={extract} disabled={streaming || extracting || userTurns < 2}>
+              {extracting ? "整理中…" : "整理入库"}
+            </Button>
+          </div>
+        </div>
+      </Card>
 
       <ErrorText>{error}</ErrorText>
 
-      <div className="flex gap-2">
-        <textarea
-          className="flex-1 rounded border p-2 text-sm"
-          rows={2}
-          placeholder="如实描述就好，Enter 发送，Shift+Enter 换行"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              send();
-            }
-          }}
-        />
-        <div className="flex flex-col gap-2">
-          <Button onClick={send} disabled={streaming || !input.trim()}>发送</Button>
-          <Button variant="ghost" onClick={extract} disabled={streaming || extracting || userTurns < 2}>
-            {extracting ? "整理中…" : "整理入库"}
-          </Button>
-        </div>
-      </div>
-
       {draft && (
-        <div className="space-y-3 rounded border bg-white p-4">
-          <h2 className="font-semibold">确认入库内容</h2>
-          <div className="grid grid-cols-2 gap-2 text-sm">
+        <Card className="animate-rise space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">确认入库内容</h2>
+            <span className="rounded-full bg-accent-soft px-3 py-1 text-xs font-medium text-accent">{draft.facts.length} 条事实</span>
+          </div>
+          <div className="grid gap-3 text-sm sm:grid-cols-2">
             {(["company", "title", "start", "end"] as const).map((k) => (
-              <label key={k} className="flex items-center gap-2">
-                <span className="w-12 text-slate-500">{{ company: "公司", title: "岗位", start: "开始", end: "结束" }[k]}</span>
+              <label key={k} className="space-y-1">
+                <span className="text-xs font-medium text-muted">{{ company: "公司", title: "岗位", start: "开始", end: "结束" }[k]}</span>
                 <input
-                  className="flex-1 rounded border px-2 py-1"
+                  className="field"
                   value={draft[k]}
                   onChange={(e) => setDraft({ ...draft, [k]: e.target.value })}
                 />
@@ -154,18 +176,18 @@ export default function CollectPage() {
           </div>
           <ul className="space-y-2 text-sm">
             {draft.facts.map((f, i) => (
-              <li key={i} className="rounded bg-slate-50 p-2">
-                <div>{f.text}</div>
-                <div className="mt-1 text-xs text-slate-500">原话：「{f.source}」</div>
+              <li key={i} className="rounded-2xl border border-line bg-paper/60 p-4">
+                <div className="font-medium">{f.text}</div>
+                <div className="mt-1.5 text-xs text-muted">原话：「{f.source}」</div>
               </li>
             ))}
           </ul>
           {draft.rejected > 0 && (
-            <p className="text-xs text-amber-700">有 {draft.rejected} 条整理结果在你的原话里找不到依据，已自动丢弃。</p>
+            <p className="text-xs text-warn">有 {draft.rejected} 条整理结果在你的原话里找不到依据，已自动丢弃。</p>
           )}
-          {draft.facts.length === 0 && <p className="text-sm text-amber-700">没有整理出可用的事实，请继续补充具体做了什么。</p>}
-          <Button onClick={save} disabled={draft.facts.length === 0}>保存到履历库</Button>
-        </div>
+          {draft.facts.length === 0 && <p className="text-sm text-warn">没有整理出可用的事实，请继续补充具体做了什么。</p>}
+          <Button variant="accent" onClick={save} disabled={draft.facts.length === 0}>保存到履历库 →</Button>
+        </Card>
       )}
     </div>
   );

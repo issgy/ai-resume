@@ -2,7 +2,7 @@
 
 import { useRef } from "react";
 import Link from "next/link";
-import { Button } from "@/components/ui";
+import { Button, Card, PageHeader } from "@/components/ui";
 import { KEYS, exportAll, importAll, uid, useStored } from "@/lib/storage";
 import type { Experience } from "@/lib/types";
 
@@ -34,32 +34,44 @@ export default function VaultPage() {
 
   if (!loaded) return null;
 
+  const factCount = experiences.reduce((n, e) => n + e.facts.length, 0);
+
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-xl font-bold">履历库</h1>
-        <div className="flex gap-2">
-          <Button variant="ghost" onClick={download}>导出备份</Button>
-          <Button variant="ghost" onClick={() => fileInput.current?.click()}>导入备份</Button>
-          <input ref={fileInput} type="file" accept="application/json" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
-          <Link href="/collect"><Button>+ 录入新经历</Button></Link>
-        </div>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        step="02"
+        title="履历库"
+        desc={`共 ${experiences.length} 段经历、${factCount} 条事实。每条事实都保留了你的原话，可随时修改。`}
+        actions={
+          <>
+            <Button variant="ghost" onClick={download}>导出备份</Button>
+            <Button variant="ghost" onClick={() => fileInput.current?.click()}>导入备份</Button>
+            <input ref={fileInput} type="file" accept="application/json" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+            <Link href="/collect"><Button variant="accent">+ 录入新经历</Button></Link>
+          </>
+        }
+      />
 
       {experiences.length === 0 && (
-        <p className="rounded border bg-white p-6 text-center text-slate-500">
-          还没有经历，<Link href="/collect" className="underline">去录入第一段</Link>
-        </p>
+        <Card className="py-14 text-center">
+          <div className="bg-brand mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl text-xl text-white">+</div>
+          <p className="text-muted">
+            还没有经历，<Link href="/collect" className="font-medium text-accent underline underline-offset-4">去录入第一段</Link>
+          </p>
+        </Card>
       )}
 
-      {experiences.map((exp) => (
-        <section key={exp.id} className="space-y-3 rounded border bg-white p-4">
+      {experiences.map((exp, idx) => (
+        <Card key={exp.id} className="animate-rise space-y-4">
           <div className="flex flex-wrap items-center gap-2">
-            <input className="rounded border px-2 py-1 font-semibold" value={exp.company} placeholder="公司" onChange={(e) => update(exp.id, { company: e.target.value })} />
-            <input className="rounded border px-2 py-1" value={exp.title} placeholder="岗位" onChange={(e) => update(exp.id, { title: e.target.value })} />
-            <input className="w-24 rounded border px-2 py-1 text-sm" value={exp.start} placeholder="开始" onChange={(e) => update(exp.id, { start: e.target.value })} />
-            <span>–</span>
-            <input className="w-24 rounded border px-2 py-1 text-sm" value={exp.end} placeholder="结束" onChange={(e) => update(exp.id, { end: e.target.value })} />
+            <span className="font-mono text-xs text-muted">0{idx + 1}</span>
+            <input className="field !w-auto flex-1 !text-base font-semibold sm:max-w-56" value={exp.company} placeholder="公司" onChange={(e) => update(exp.id, { company: e.target.value })} />
+            <input className="field !w-auto flex-1 sm:max-w-48" value={exp.title} placeholder="岗位" onChange={(e) => update(exp.id, { title: e.target.value })} />
+            <div className="flex items-center gap-1.5">
+              <input className="field !w-28" value={exp.start} placeholder="开始" onChange={(e) => update(exp.id, { start: e.target.value })} />
+              <span className="text-muted">–</span>
+              <input className="field !w-28" value={exp.end} placeholder="结束" onChange={(e) => update(exp.id, { end: e.target.value })} />
+            </div>
             <Button
               variant="danger"
               className="ml-auto"
@@ -71,19 +83,25 @@ export default function VaultPage() {
 
           <ul className="space-y-2">
             {exp.facts.map((f) => (
-              <li key={f.id} className="flex gap-2">
-                <div className="flex-1">
+              <li key={f.id} className="group flex gap-2 rounded-2xl border border-line bg-paper/60 p-3">
+                <div className="flex-1 space-y-1.5">
                   <textarea
-                    className="w-full rounded border p-2 text-sm"
+                    className="field resize-none"
                     rows={2}
                     value={f.text}
                     onChange={(e) =>
                       update(exp.id, { facts: exp.facts.map((x) => (x.id === f.id ? { ...x, text: e.target.value } : x)) })
                     }
                   />
-                  <div className="text-xs text-slate-500">原话：「{f.source}」</div>
+                  <div className="px-1 text-xs text-muted">原话：「{f.source}」</div>
                 </div>
-                <Button variant="danger" onClick={() => update(exp.id, { facts: exp.facts.filter((x) => x.id !== f.id) })}>×</Button>
+                <button
+                  className="h-8 w-8 shrink-0 rounded-full text-muted transition hover:bg-red-50 hover:text-red-600"
+                  title="删除这条事实"
+                  onClick={() => update(exp.id, { facts: exp.facts.filter((x) => x.id !== f.id) })}
+                >
+                  ×
+                </button>
               </li>
             ))}
           </ul>
@@ -96,11 +114,13 @@ export default function VaultPage() {
           >
             + 手动补充一条
           </Button>
-        </section>
+        </Card>
       ))}
 
       {experiences.length > 0 && (
-        <Link href="/match"><Button>下一步：粘贴 JD 匹配 →</Button></Link>
+        <div className="flex justify-end">
+          <Link href="/match"><Button variant="accent" className="!px-6 !py-3">下一步：粘贴 JD 匹配 →</Button></Link>
+        </div>
       )}
     </div>
   );

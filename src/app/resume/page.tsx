@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Button } from "@/components/ui";
+import { Button, Card, PageHeader } from "@/components/ui";
 import { KEYS, useStored } from "@/lib/storage";
 import type { Experience, Profile, ResumeResult } from "@/lib/types";
 
@@ -22,9 +22,9 @@ export default function ResumePage() {
   if (!loaded) return null;
   if (!resume) {
     return (
-      <p className="rounded border bg-white p-6 text-center text-slate-500">
-        还没有生成简历，<Link href="/match" className="underline">先去做 JD 匹配</Link>
-      </p>
+      <Card className="py-14 text-center text-muted">
+        还没有生成简历，<Link href="/match" className="font-medium text-accent underline underline-offset-4">先去做 JD 匹配</Link>
+      </Card>
     );
   }
 
@@ -36,34 +36,36 @@ export default function ResumePage() {
 
   return (
     <div className="space-y-6">
-      <div className="no-print space-y-3 rounded border bg-white p-4">
-        <h2 className="font-semibold">基本信息</h2>
+      <PageHeader step="04" title="简历导出" desc="点开每条亮点可查看来源和面试追问。打印时只保留简历正文。" />
+
+      <Card className="no-print space-y-4">
+        <h2 className="text-sm font-semibold">基本信息</h2>
         <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
           {FIELDS.map(([k, label]) => (
             <input
               key={k}
-              className="rounded border px-2 py-1"
+              className="field"
               placeholder={label}
               value={profile[k]}
               onChange={(e) => setProfile({ ...profile, [k]: e.target.value })}
             />
           ))}
         </div>
-        <div className="flex gap-2">
-          <Button onClick={() => window.print()}>导出 PDF（打印 → 另存为 PDF）</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="accent" onClick={() => window.print()}>导出 PDF（打印 → 另存为 PDF）</Button>
           <Link href="/match"><Button variant="ghost">换一个 JD</Button></Link>
         </div>
-      </div>
+      </Card>
 
       {/* 简历正文：屏幕和打印共用 */}
-      <article className="rounded border bg-white p-8 print:border-0 print:p-0">
-        <header className="mb-4 border-b pb-3">
-          <h1 className="text-2xl font-bold">{profile.name || "你的姓名"}</h1>
+      <article className="mx-auto max-w-[210mm] rounded-2xl border border-line bg-white p-10 shadow-[0_30px_80px_-40px_rgb(40_30_120/0.35)] print:max-w-none print:rounded-none print:border-0 print:p-0 print:shadow-none">
+        <header className="mb-5 border-b border-slate-300 pb-4">
+          <h1 className="text-3xl font-bold tracking-tight">{profile.name || "你的姓名"}</h1>
           <p className="mt-1 text-sm text-slate-600">
             {[profile.phone, profile.email, profile.school, profile.birthday].filter(Boolean).join(" ｜ ") || "电话 ｜ 邮箱 ｜ 院校"}
           </p>
         </header>
-        <h2 className="mb-2 text-base font-semibold">工作经历</h2>
+        <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">工作经历</h2>
         {sections.map(({ exp, items }) => (
           <section key={exp.id} className="mb-4 break-inside-avoid">
             <div className="flex justify-between text-sm font-semibold">
@@ -72,7 +74,7 @@ export default function ResumePage() {
             </div>
             {items.length === 0 && (
               <>
-                <p className="no-print mt-1 text-xs text-amber-700">
+                <p className="no-print mt-1 rounded-lg bg-amber-50 px-2 py-1 text-xs text-amber-800">
                   这段经历没有生成定向亮点（可能是生成简历后才录入的），下面直接列出履历库中的事实。
                   <Link href="/match" className="underline">重新生成</Link>可获得针对 JD 的亮点。
                 </p>
@@ -89,9 +91,9 @@ export default function ResumePage() {
                   <details className="group">
                     <summary className="cursor-pointer list-none before:mr-1 before:content-['•'] print:cursor-auto">
                       {h.text}
-                      <span className="no-print ml-1 text-xs text-blue-600 group-open:hidden">来源与追问</span>
+                      <span className="no-print ml-1.5 rounded-full bg-accent-soft px-2 py-0.5 text-[11px] text-accent group-open:hidden">来源与追问</span>
                     </summary>
-                    <div className="no-print my-2 space-y-2 rounded bg-slate-50 p-3 text-xs">
+                    <div className="no-print my-2 space-y-3 rounded-xl border border-line bg-paper p-4 text-xs">
                       <div>
                         <div className="font-semibold text-slate-600">来源</div>
                         {h.factIds.map((id) => (
@@ -117,9 +119,9 @@ export default function ResumePage() {
       </article>
 
       {resume.dropped.length > 0 && (
-        <div className="no-print rounded border border-amber-200 bg-amber-50 p-4 text-sm">
-          <h2 className="mb-2 font-semibold text-amber-800">以下亮点未写入简历</h2>
-          <ul className="space-y-1">
+        <div className="no-print rounded-3xl border border-amber-200 bg-amber-50/70 p-5 text-sm">
+          <h2 className="mb-3 font-semibold text-amber-900">以下亮点未写入简历</h2>
+          <ul className="space-y-2">
             {resume.dropped.map((d, i) => (
               <li key={i}>
                 <span className="text-slate-700">{d.text}</span>
