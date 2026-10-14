@@ -1,36 +1,41 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AI 简历 · 可辩护的 JD 匹配器（简版）
 
-## Getting Started
+一次录入真实经历，粘贴 JD 定向生成简历。每条亮点都能追溯到用户原话，并附面试追问；找不到依据的内容不写进简历。
 
-First, run the development server:
+## 功能流程
+
+1. `/collect` 对话录入：模型追问细节和数字，"整理入库"时拆成原子事实，每条事实的 `source` 必须逐字出现在用户发言里，否则丢弃
+2. `/vault` 履历库：编辑、删除、手动补充事实；导出/导入 JSON 备份
+3. `/match` 粘贴 JD：生成"JD 要求 ↔ 事实"匹配表，没有依据的要求标为缺口
+4. `/resume` 定向简历：亮点必须引用事实，且亮点中的数字必须出现在所引事实中，否则剔除并说明原因；浏览器打印导出 PDF
+
+数据只存在浏览器 localStorage，没有登录和数据库。
+
+## 本地运行
 
 ```bash
+npm install
+cp .env.example .env.local   # 填入 LLM_API_KEY
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 模型配置
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+走 OpenAI 兼容接口，改环境变量即可切换（见 `.env.example`）：
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| 变量 | 默认值 |
+|---|---|
+| `LLM_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4`（智谱） |
+| `LLM_API_KEY` | 必填 |
+| `LLM_MODEL` | `glm-4-flash` |
 
-## Learn More
+## 部署到 Vercel
 
-To learn more about Next.js, take a look at the following resources:
+在 Vercel 导入本仓库，在 Project Settings → Environment Variables 填上面三个变量，之后每次 push 到 main 自动部署。
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 目录
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `src/lib/llm.ts` 模型调用（普通 / JSON / 流式）
+- `src/lib/prompts.ts` 四个提示词：采访、整理、匹配、撰写
+- `src/lib/validate.ts` 防编造校验
+- `src/lib/storage.ts` localStorage 持久化
