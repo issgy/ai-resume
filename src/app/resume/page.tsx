@@ -81,7 +81,10 @@ export default function ResumePage() {
           <Button variant="accent" onClick={exportPdf} disabled={exporting}>
             {exporting ? "正在生成 PDF…" : "下载 PDF"}
           </Button>
-          <Button variant="ghost" className="hidden sm:inline-flex" onClick={() => window.print()}>打印</Button>
+          {/* 打印只在桌面端提供；用外层控制显隐，避免和按钮自身的 inline-flex 冲突 */}
+          <span className="hidden sm:inline">
+            <Button variant="ghost" onClick={() => window.print()}>打印</Button>
+          </span>
           <Link href="/match"><Button variant="ghost">换一个 JD</Button></Link>
         </div>
         <ErrorText>{exportError}</ErrorText>
