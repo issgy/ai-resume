@@ -80,6 +80,14 @@ export async function streamLLM(messages: LLMMessage[], temperature = 0.5): Prom
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let buffer = "";
+  let sent = false;
+
+  /** 结束输出并主动断开上游：有的服务商发完 [DONE] 后不关闭连接，不主动断开会一直挂到平台超时 */
+  function finish(out: ReadableStreamDefaultController<Uint8Array>) {
+    clearTimeout(timer);
+    reader.cancel().catch(() => {});
+    out.close();
+  }
 
   return new ReadableStream({
     async pull(out) {
@@ -88,13 +96,14 @@ export async function streamLLM(messages: LLMMessage[], temperature = 0.5): Prom
         chunk = await reader.read();
       } catch (e) {
         clearTimeout(timer);
-        out.error(controller.signal.aborted ? new Error(TIMEOUT_MSG) : e);
+        // 已经输出过内容就正常收尾，保留已生成的部分；否则报错让前端提示重试
+        if (sent) out.close();
+        else out.error(controller.signal.aborted ? new Error(TIMEOUT_MSG) : e);
         return;
       }
       const { done, value } = chunk;
       if (done) {
-        clearTimeout(timer);
-        out.close();
+        finish(out);
         return;
       }
       buffer += decoder.decode(value, { stream: true });
@@ -104,10 +113,21 @@ export async function streamLLM(messages: LLMMessage[], temperature = 0.5): Prom
         const trimmed = line.trim();
         if (!trimmed.startsWith("data:")) continue;
         const payload = trimmed.slice(5).trim();
-        if (payload === "[DONE]") continue;
+        if (payload === "[DONE]") {
+          finish(out);
+          return;
+        }
         try {
-          const delta = JSON.parse(payload).choices?.[0]?.delta?.content;
-          if (delta) out.enqueue(encoder.encode(delta));
+          const choice = JSON.parse(payload).choices?.[0];
+          const delta = choice?.delta?.content;
+          if (delta) {
+            out.enqueue(encoder.encode(delta));
+            sent = true;
+          }
+          if (choice?.finish_reason) {
+            finish(out);
+            return;
+          }
         } catch {
           // 忽略不完整的行
         }
