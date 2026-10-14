@@ -29,9 +29,10 @@ export default function ResumePage() {
   }
 
   const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, f] as const)));
+  // 履历库里的每段经历都要出现在简历中；没有定向亮点的经历直接列出原始事实
   const sections = experiences
-    .map((e) => ({ exp: e, items: resume.highlights.filter((h) => h.experienceId === e.id) }))
-    .filter((s) => s.items.length > 0);
+    .filter((e) => e.facts.length > 0)
+    .map((e) => ({ exp: e, items: resume.highlights.filter((h) => h.experienceId === e.id) }));
 
   return (
     <div className="space-y-6">
@@ -69,6 +70,19 @@ export default function ResumePage() {
               <span>{exp.company} · {exp.title}</span>
               <span className="font-normal text-slate-500">{[exp.start, exp.end].filter(Boolean).join(" – ")}</span>
             </div>
+            {items.length === 0 && (
+              <>
+                <p className="no-print mt-1 text-xs text-amber-700">
+                  这段经历没有生成定向亮点（可能是生成简历后才录入的），下面直接列出履历库中的事实。
+                  <Link href="/match" className="underline">重新生成</Link>可获得针对 JD 的亮点。
+                </p>
+                <ul className="mt-1 space-y-1">
+                  {exp.facts.map((f) => (
+                    <li key={f.id} className="text-sm before:mr-1 before:content-['•']">{f.text}</li>
+                  ))}
+                </ul>
+              </>
+            )}
             <ul className="mt-1 space-y-1">
               {items.map((h, i) => (
                 <li key={i} className="text-sm">

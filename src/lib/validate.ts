@@ -22,7 +22,10 @@ export function checkHighlights(raw: Highlight[], experiences: Experience[]) {
   const dropped: DroppedHighlight[] = [];
 
   for (const h of raw) {
-    const exp = experiences.find((e) => e.id === h.experienceId);
+    // 模型偶尔会写错 experienceId，此时按所引用事实反推归属经历
+    const exp =
+      experiences.find((e) => e.id === h.experienceId) ??
+      experiences.find((e) => e.facts.some((f) => (h.factIds ?? []).includes(f.id)));
     if (!exp) {
       dropped.push({ text: h.text, reason: "未关联到任何经历" });
       continue;
@@ -39,7 +42,7 @@ export function checkHighlights(raw: Highlight[], experiences: Experience[]) {
       dropped.push({ text: h.text, reason: `数字 ${unknown.join("、")} 在你的原始描述中找不到` });
       continue;
     }
-    kept.push({ ...h, factIds: facts.map((f) => f.id), questions: h.questions ?? [] });
+    kept.push({ ...h, experienceId: exp.id, factIds: facts.map((f) => f.id), questions: h.questions ?? [] });
   }
   return { kept, dropped };
 }
