@@ -1,7 +1,9 @@
 "use client";
 
+import { useRef, useState } from "react";
 import Link from "next/link";
-import { Button, Card, PageHeader } from "@/components/ui";
+import { Button, Card, ErrorText, PageHeader } from "@/components/ui";
+import { isInAppBrowser, renderResume, saveFile, toPdf } from "@/lib/exportPdf";
 import { KEYS, useStored } from "@/lib/storage";
 import type { Experience, Profile, ResumeResult } from "@/lib/types";
 
@@ -18,6 +20,30 @@ export default function ResumePage() {
   const [experiences, , loaded] = useStored<Experience[]>(KEYS.experiences, []);
   const [profile, setProfile] = useStored<Profile>(KEYS.profile, EMPTY_PROFILE);
   const [resume] = useStored<ResumeResult | null>(KEYS.resume, null);
+  const articleRef = useRef<HTMLElement>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+  const [longImage, setLongImage] = useState("");
+
+  async function exportPdf() {
+    if (!articleRef.current) return;
+    setExportError("");
+    setExporting(true);
+    try {
+      const rendered = await renderResume(articleRef.current);
+      if (isInAppBrowser()) {
+        // 内置浏览器拦截下载：给一张长图，长按即可保存到相册
+        setLongImage(rendered.canvas.toDataURL("image/jpeg", 0.92));
+        return;
+      }
+      const file = await toPdf(rendered, `${profile.name.trim() || "我的"}-简历.pdf`);
+      await saveFile(file);
+    } catch (e) {
+      setExportError(`导出失败：${(e as Error).message || "未知错误"}，请重试`);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   if (!loaded) return null;
   if (!resume) {
@@ -36,7 +62,7 @@ export default function ResumePage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader step="04" title="简历导出" desc="点开每条亮点可查看来源和面试追问。打印时只保留简历正文。" />
+      <PageHeader step="04" title="简历导出" desc="点开每条亮点可查看来源和面试追问。导出的 PDF 只保留简历正文。" />
 
       <Card className="no-print space-y-4">
         <h2 className="text-sm font-semibold">基本信息</h2>
@@ -52,13 +78,31 @@ export default function ResumePage() {
           ))}
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="accent" onClick={() => window.print()}>导出 PDF（打印 → 另存为 PDF）</Button>
+          <Button variant="accent" onClick={exportPdf} disabled={exporting}>
+            {exporting ? "正在生成 PDF…" : "下载 PDF"}
+          </Button>
+          <Button variant="ghost" className="hidden sm:inline-flex" onClick={() => window.print()}>打印</Button>
           <Link href="/match"><Button variant="ghost">换一个 JD</Button></Link>
         </div>
+        <ErrorText>{exportError}</ErrorText>
       </Card>
 
+      {longImage && (
+        <div className="no-print fixed inset-0 z-50 flex flex-col bg-ink/80 p-4 backdrop-blur-sm" onClick={() => setLongImage("")}>
+          <div className="mx-auto mb-3 w-full max-w-md rounded-2xl bg-card p-4 text-sm" onClick={(e) => e.stopPropagation()}>
+            <p className="font-semibold">长按下方图片，保存到相册</p>
+            <p className="mt-1 text-xs text-muted">当前是微信 / 支付宝等内置浏览器，无法直接下载文件。需要 PDF 的话，点右上角「···」选择「在浏览器中打开」，再点「下载 PDF」。</p>
+            <Button variant="ghost" className="mt-3 w-full" onClick={() => setLongImage("")}>关闭</Button>
+          </div>
+          <div className="mx-auto w-full max-w-md flex-1 overflow-y-auto rounded-lg" onClick={(e) => e.stopPropagation()}>
+            {/* eslint-disable-next-line @next/next/no-img-element -- data URL 长图，需要原生 img 才能长按保存 */}
+            <img src={longImage} alt="简历长图" className="w-full bg-white" />
+          </div>
+        </div>
+      )}
+
       {/* 简历正文：屏幕和打印共用 */}
-      <article className="mx-auto max-w-[210mm] rounded-2xl border border-line bg-white p-10 shadow-[0_30px_80px_-40px_rgb(20_40_35/0.35)] print:max-w-none print:rounded-none print:border-0 print:p-0 print:shadow-none">
+      <article ref={articleRef} className="mx-auto max-w-[210mm] rounded-2xl border border-line bg-white p-10 shadow-[0_30px_80px_-40px_rgb(20_40_35/0.35)] print:max-w-none print:rounded-none print:border-0 print:p-0 print:shadow-none">
         <header className="mb-5 border-b border-slate-300 pb-4">
           <h1 className="text-3xl font-bold tracking-tight">{profile.name || "你的姓名"}</h1>
           <p className="mt-1 text-sm text-slate-600">
