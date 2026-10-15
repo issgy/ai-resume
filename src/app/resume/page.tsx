@@ -6,7 +6,7 @@ import { Button, Card, ErrorText, PageHeader } from "@/components/ui";
 import { isInAppBrowser, renderResume, saveFile, toPdf } from "@/lib/exportPdf";
 import { KEYS, useStored } from "@/lib/storage";
 import type { Experience, Profile, ResumeResult } from "@/lib/types";
-import { dropIndefensible } from "@/lib/validate";
+import { VERIFY_FAILED, VERIFY_MISSING, dropIndefensible, dropStale } from "@/lib/validate";
 
 const EMPTY_PROFILE: Profile = { name: "", phone: "", email: "", school: "", birthday: "" };
 const FIELDS: [keyof Profile, string][] = [
@@ -21,14 +21,16 @@ export default function ResumePage() {
   const [experiences, , loaded] = useStored<Experience[]>(KEYS.experiences, []);
   const [profile, setProfile] = useStored<Profile>(KEYS.profile, EMPTY_PROFILE);
   const [stored] = useStored<ResumeResult | null>(KEYS.resume, null);
-  const resume = stored && dropIndefensible(stored);
+  const resume = stored && dropStale(dropIndefensible(stored), experiences);
+  // 内容核验上线前生成的简历没有经过核验，只能查看，不能导出
+  const exportable = !!resume?.provenanceChecked;
   const articleRef = useRef<HTMLElement>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
   const [longImage, setLongImage] = useState("");
 
   async function exportPdf() {
-    if (!articleRef.current) return;
+    if (!articleRef.current || !exportable) return;
     setExportError("");
     setExporting(true);
     try {
@@ -57,6 +59,11 @@ export default function ResumePage() {
   }
 
   const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, f] as const)));
+  const verifyFailed = resume.dropped.some((d) => d.reason === VERIFY_FAILED || d.reason === VERIFY_MISSING);
+  const sourceLabel = (id: string) => {
+    const origin = factById.get(id)?.origin;
+    return origin === "edited" ? "你在履历库手动修改为" : origin === "manual" ? "你手动补充" : "你说过";
+  };
   // 履历库里的每段经历都要出现在简历中；没有定向亮点的经历直接列出原始事实，
   // 但被剔除亮点引用过的事实不列出，避免答不上来的内容换个形式回到简历里
   const sections = experiences
@@ -90,15 +97,26 @@ export default function ResumePage() {
           ))}
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="accent" onClick={exportPdf} disabled={exporting}>
+          <Button variant="accent" onClick={exportPdf} disabled={exporting || !exportable}>
             {exporting ? "正在生成 PDF…" : "下载 PDF"}
           </Button>
           {/* 打印只在桌面端提供；用外层控制显隐，避免和按钮自身的 inline-flex 冲突 */}
           <span className="hidden sm:inline">
-            <Button variant="ghost" onClick={() => window.print()}>打印</Button>
+            <Button variant="ghost" onClick={() => window.print()} disabled={!exportable}>打印</Button>
           </span>
-          <Link href="/match"><Button variant="ghost">换一个 JD</Button></Link>
+          <Link href="/match"><Button variant="ghost">{exportable ? "换一个 JD" : "重新生成"}</Button></Link>
         </div>
+        {!exportable && (
+          <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            这份简历生成于「亮点内容核验」上线之前，亮点没有逐条核对是否出自你的原话，只能查看、不能导出。
+            请<Link href="/match" className="underline">重新生成</Link>后再下载 PDF。
+          </p>
+        )}
+        {exportable && verifyFailed && (
+          <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            内容核验服务出错或超时，未能确认的亮点已剔除（见页面底部）。请稍后<Link href="/match" className="underline">重新生成</Link>。
+          </p>
+        )}
         <ErrorText>{exportError}</ErrorText>
       </Card>
 
@@ -117,7 +135,7 @@ export default function ResumePage() {
       )}
 
       {/* 简历正文：屏幕和打印共用 */}
-      <article ref={articleRef} className="mx-auto max-w-[210mm] rounded-2xl border border-line bg-white p-10 shadow-[0_30px_80px_-40px_rgb(20_40_35/0.35)] print:max-w-none print:rounded-none print:border-0 print:p-0 print:shadow-none">
+      <article ref={articleRef} className={`${exportable ? "" : "print:hidden"} mx-auto max-w-[210mm] rounded-2xl border border-line bg-white p-10 shadow-[0_30px_80px_-40px_rgb(20_40_35/0.35)] print:max-w-none print:rounded-none print:border-0 print:p-0 print:shadow-none`}>
         <header className="mb-5 border-b border-slate-300 pb-4">
           <h1 className="text-3xl font-bold tracking-tight">{profile.name || "你的姓名"}</h1>
           <p className="mt-1 text-sm text-slate-600">
@@ -158,7 +176,7 @@ export default function ResumePage() {
                       <div>
                         <div className="font-semibold text-slate-600">来源</div>
                         {h.factIds.map((id) => (
-                          <div key={id} className="text-slate-500">你说过：「{factById.get(id)?.source}」</div>
+                          <div key={id} className="text-slate-500">{sourceLabel(id)}：「{h.sources?.[id] ?? factById.get(id)?.source}」</div>
                         ))}
                       </div>
                       <div>

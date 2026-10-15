@@ -1,9 +1,15 @@
 export type Fact = {
   id: string;
   text: string;
-  /** 用户原话，用于溯源 */
+  /** 用户原话，用于溯源；在履历库手动修改后即为修改后的文字 */
   source: string;
+  /** 来源类型：对话录入 / 手动补充 / 手动修改；旧数据没有该字段，按对话录入处理 */
+  origin?: FactOrigin;
+  /** 手动修改前的原话（只在第一次修改时记录） */
+  originalSource?: string;
 };
+
+export type FactOrigin = "chat" | "manual" | "edited";
 
 export type Experience = {
   id: string;
@@ -44,6 +50,8 @@ export type Highlight = {
   text: string;
   factIds: string[];
   questions: QA[];
+  /** 生成并核验时所引事实的原话快照（事实 id → 原话）；之后事实被改或删，亮点即失效。旧数据没有该字段 */
+  sources?: Record<string, string>;
 };
 
 export type DroppedHighlight = {
@@ -60,4 +68,6 @@ export type ResumeResult = {
   jd: string;
   highlights: Highlight[];
   dropped: DroppedHighlight[];
+  /** 经过内容核验流程生成（GAPS#2 之后）；旧简历没有该字段，只能查看、不能导出 */
+  provenanceChecked?: boolean;
 };

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button, Card, ErrorText, PageHeader, postJson } from "@/components/ui";
 import { KEYS, useStored } from "@/lib/storage";
 import type { Experience, MatchResult, Requirement, ResumeResult } from "@/lib/types";
+import { failVerification } from "@/lib/validate";
 
 export default function MatchPage() {
   const router = useRouter();
@@ -13,7 +14,7 @@ export default function MatchPage() {
   const [, setResume] = useStored<ResumeResult | null>(KEYS.resume, null);
   const [jdDraft] = useStored<string>(KEYS.jdDraft, "");
   const [jd, setJd] = useState("");
-  const [loading, setLoading] = useState<"" | "match" | "resume">("");
+  const [loading, setLoading] = useState<"" | "match" | "resume" | "verify">("");
   const [error, setError] = useState("");
 
   const currentJd = jd || match?.jd || jdDraft;
@@ -37,8 +38,23 @@ export default function MatchPage() {
     setError("");
     setLoading("resume");
     try {
-      const data = await postJson<Omit<ResumeResult, "jd">>("/api/resume", { ...match, experiences });
-      setResume({ jd: match.jd, ...data });
+      const data = await postJson<Pick<ResumeResult, "highlights" | "dropped">>("/api/resume", { ...match, experiences });
+      // 规则校验通过的亮点再做一次大模型内容核验；核验请求整体失败时这批亮点全部剔除，不放行未核验内容
+      let verified: Pick<ResumeResult, "highlights" | "dropped"> = { highlights: [], dropped: [] };
+      if (data.highlights.length > 0) {
+        setLoading("verify");
+        try {
+          verified = await postJson<Pick<ResumeResult, "highlights" | "dropped">>("/api/verify", { highlights: data.highlights, experiences });
+        } catch {
+          verified = { highlights: [], dropped: failVerification(data.highlights) };
+        }
+      }
+      setResume({
+        jd: match.jd,
+        highlights: verified.highlights,
+        dropped: [...data.dropped, ...verified.dropped],
+        provenanceChecked: true,
+      });
       router.push("/resume");
     } catch (e) {
       setError((e as Error).message);
@@ -136,7 +152,7 @@ export default function MatchPage() {
           </ul>
           <div className="flex justify-end">
             <Button variant="accent" className="!px-6 !py-3" onClick={runResume} disabled={!!loading}>
-              {loading === "resume" ? "生成中，约需 20-40 秒…" : "生成定向简历 →"}
+              {loading === "resume" ? "生成中，约需 20-40 秒…" : loading === "verify" ? "正在核验亮点是否都出自你的原话…" : "生成定向简历 →"}
             </Button>
           </div>
         </Card>

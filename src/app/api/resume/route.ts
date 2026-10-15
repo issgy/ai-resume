@@ -16,7 +16,7 @@ export async function POST(req: Request) {
     experienceId: e.id,
     company: e.company,
     title: e.title,
-    facts: e.facts.map((f) => ({ id: f.id, text: f.text })),
+    facts: e.facts.map((f) => ({ id: f.id, text: f.text, source: f.source })),
   }));
   try {
     // 每段经历单独并行生成：单次输出更短，总耗时约等于最慢的一段，避免整份简历一次生成超时
