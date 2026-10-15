@@ -3,13 +3,14 @@ export type Fact = {
   text: string;
   /** 用户原话，用于溯源；在履历库手动修改后即为修改后的文字 */
   source: string;
-  /** 来源类型：对话录入 / 手动补充 / 手动修改；旧数据没有该字段，按对话录入处理 */
+  /** 来源类型：对话录入 / 简历导入 / 手动补充 / 手动修改；旧数据没有该字段，按对话录入处理 */
   origin?: FactOrigin;
   /** 手动修改前的原话（只在第一次修改时记录） */
   originalSource?: string;
 };
 
-export type FactOrigin = "chat" | "manual" | "edited";
+/** imported：从粘贴的简历文本导入，source 是粘贴原文中的逐字连续片段 */
+export type FactOrigin = "chat" | "imported" | "manual" | "edited";
 
 export type Experience = {
   id: string;

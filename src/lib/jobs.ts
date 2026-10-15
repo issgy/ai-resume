@@ -2,37 +2,62 @@
 
 import { useSyncExternalStore } from "react";
 import { postJson } from "@/components/ui";
-import { KEYS, writeStored } from "@/lib/storage";
-import type { Experience, Requirement, ResumeResult } from "@/lib/types";
-import { failVerification } from "@/lib/validate";
+import { KEYS, read, uid, writeStored } from "@/lib/storage";
+import { experienceKey } from "@/lib/importText";
+import type { ImportResponse } from "@/lib/importText";
+import type { Experience, Profile, Requirement, ResumeResult } from "@/lib/types";
+import { failVerification, norm } from "@/lib/validate";
 
 /**
- * 「分析匹配」「生成定向简历」的后台任务。
+ * 「粘贴简历导入」「分析匹配」「生成定向简历」的后台任务。
  * 状态是模块级单例，与页面组件的生命周期无关：用户中途切到其他步骤，请求继续跑，结果照常写入 localStorage。
  * 整页刷新/关闭会中断请求，所以进行中的任务记在 sessionStorage，刷新后据此提示「被中断」而不是静默。
  */
 
-export type JobKind = "match" | "resume";
+export type JobKind = "import" | "match" | "resume";
 
 export type Notice = { tone: "success" | "error"; text: string; href: string };
 
+/** 一次导入写入履历库后的汇总，显示在录入页 */
+export type ImportSummary = {
+  added: number;
+  merged: number;
+  /** 实际写入的事实条数 */
+  facts: number;
+  /** 与履历库已有事实同一原文、跳过的条数 */
+  duplicates: number;
+  /** 在原文中找不到依据而丢弃的条数 */
+  rejected: number;
+  /** 填充了的个人信息字段（中文名） */
+  profileFields: string[];
+  failedChunks: number;
+  totalChunks: number;
+};
+
 export type JobsState = {
   /** 进行中的阶段，null 表示空闲；同类任务同一时间只有一个 */
+  import: "import" | null;
   match: "match" | null;
   resume: "resume" | "verify" | null;
-  /** 最近一次失败原因，显示在匹配页；开始新任务时清空 */
+  /** 最近一次匹配/生成失败原因，显示在匹配页；开始新任务时清空 */
   error: string;
-  /** 用户不在匹配页时的完成/失败提示，显示在顶部导航 */
+  /** 最近一次导入失败原因，显示在录入页 */
+  importError: string;
+  /** 最近一次导入的汇总 */
+  importSummary: ImportSummary | null;
+  /** 用户不在任务所属页面时的完成/失败提示，显示在顶部导航 */
   notice: Notice | null;
 };
 
 const PENDING_KEY = (kind: JobKind) => `air:job:${kind}`;
 const INTERRUPTED: Record<JobKind, string> = {
+  import: "上次简历导入被中断，请重新导入",
   match: "上次匹配分析被中断，请重新分析",
   resume: "上次生成被中断，请重新生成",
 };
+const HREF: Record<JobKind, string> = { import: "/collect", match: "/match", resume: "/match" };
 
-const SERVER_STATE: JobsState = { match: null, resume: null, error: "", notice: null };
+const SERVER_STATE: JobsState = { import: null, match: null, resume: null, error: "", importError: "", importSummary: null, notice: null };
 let state: JobsState = SERVER_STATE;
 let initialized = false;
 const listeners = new Set<() => void>();
@@ -77,14 +102,15 @@ function init() {
   if (initialized) return;
   initialized = true;
   // 两类都被中断时以生成简历的提示为准（后写覆盖先写）
-  for (const kind of ["match", "resume"] as const) {
+  for (const kind of ["import", "match", "resume"] as const) {
     let pending = false;
     try {
       pending = sessionStorage.getItem(PENDING_KEY(kind)) !== null;
     } catch {}
     if (!pending || state[kind]) continue;
     markPending(kind, false);
-    update({ error: INTERRUPTED[kind], notice: { tone: "error", text: INTERRUPTED[kind], href: "/match" } });
+    const notice: Notice = { tone: "error", text: INTERRUPTED[kind], href: HREF[kind] };
+    update(kind === "import" ? { importError: INTERRUPTED[kind], notice } : { error: INTERRUPTED[kind], notice });
   }
 }
 
@@ -108,6 +134,77 @@ export function attachResumeRedirect(fn: () => void) {
   return () => {
     if (onResumeDone === fn) onResumeDone = null;
   };
+}
+
+const PROFILE_LABELS: Record<keyof Profile, string> = { name: "姓名", phone: "电话", email: "邮箱", school: "学校", birthday: "出生日期" };
+const EMPTY_PROFILE: Profile = { name: "", phone: "", email: "", school: "", birthday: "" };
+
+/**
+ * 把导入结果写入履历库（产品决策：不逐条确认）：同 company + title 的经历合并到已有经历，按 source 跳过已有事实；
+ * 其余作为新经历追加。个人信息只填充当前为空的字段。以 localStorage 中的最新值为准。
+ */
+function applyImport(data: ImportResponse): ImportSummary {
+  const experiences = read<Experience[]>(KEYS.experiences, []);
+  let added = 0;
+  let merged = 0;
+  let facts = 0;
+  let duplicates = 0;
+  for (const imp of data.experiences) {
+    const key = experienceKey(imp);
+    const idx = key ? experiences.findIndex((e) => experienceKey(e) === key) : -1;
+    const existing = idx >= 0 ? experiences[idx] : null;
+    const seen = new Set((existing?.facts ?? []).map((f) => norm(f.source)));
+    const fresh = imp.facts
+      .filter((f) => {
+        const dup = seen.has(norm(f.source));
+        if (dup) duplicates++;
+        return !dup;
+      })
+      .map((f) => ({ id: uid(), text: f.text, source: f.source, origin: "imported" as const }));
+    facts += fresh.length;
+    if (existing) {
+      merged++;
+      experiences[idx] = { ...existing, start: existing.start || imp.start, end: existing.end || imp.end, facts: [...existing.facts, ...fresh] };
+    } else {
+      added++;
+      experiences.push({ id: uid(), company: imp.company, title: imp.title, start: imp.start, end: imp.end, facts: fresh });
+    }
+  }
+  writeStored(KEYS.experiences, experiences);
+
+  const profile = { ...EMPTY_PROFILE, ...read<Partial<Profile>>(KEYS.profile, {}) };
+  const profileFields: string[] = [];
+  for (const k of Object.keys(PROFILE_LABELS) as (keyof Profile)[]) {
+    const v = data.profile[k]?.trim();
+    if (v && !profile[k]?.trim()) {
+      profile[k] = v;
+      profileFields.push(PROFILE_LABELS[k]);
+    }
+  }
+  if (profileFields.length > 0) writeStored(KEYS.profile, profile);
+
+  return { added, merged, facts, duplicates, rejected: data.rejected, profileFields, failedChunks: data.failedChunks, totalChunks: data.totalChunks };
+}
+
+export async function runImport(text: string) {
+  if (state.import) return;
+  update({ import: "import", importError: "", importSummary: null, notice: null });
+  markPending("import", true);
+  try {
+    const data = await postJson<ImportResponse>("/api/import", { text });
+    const summary = applyImport(data);
+    const partial = summary.failedChunks > 0 ? "，有部分内容解析失败" : "";
+    update({
+      import: null,
+      importSummary: summary,
+      notice: { tone: "success", text: `简历导入完成：新增 ${summary.added} 段、合并 ${summary.merged} 段经历${partial}，点击查看`, href: "/collect" },
+    });
+  } catch (e) {
+    const message = (e as Error).message;
+    update({ import: null, importError: message, notice: { tone: "error", text: `简历导入失败：${message}`, href: "/collect" } });
+  } finally {
+    markPending("import", false);
+  }
 }
 
 export async function runMatch(jd: string, experiences: Experience[]) {

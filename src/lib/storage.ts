@@ -12,7 +12,7 @@ export const KEYS = {
   jdDraft: "air:jdDraft",
 } as const;
 
-function read<T>(key: string, fallback: T): T {
+export function read<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
     return raw ? (JSON.parse(raw) as T) : fallback;

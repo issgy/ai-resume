@@ -5,7 +5,7 @@ const NUM_RE = /\d+(?:\.\d+)?/g;
 export const TERM_RE =/[A-Za-z][A-Za-z0-9.+#-]*[A-Za-z0-9+#]/g;
 
 /** 归一化：去空白和常见标点，便于做"是否逐字出现"的比较 */
-function norm(s: string) {
+export function norm(s: string) {
   return s.replace(/[\s，。、,.;；:：！!？?“”"'‘’（）()]/g, "");
 }
 

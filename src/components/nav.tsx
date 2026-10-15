@@ -17,7 +17,13 @@ export function Nav() {
   const pathname = usePathname();
   const jobs = useJobs();
   const notice = jobs.notice;
-  const running = jobs.resume ? "定向简历生成中，可以先去做别的，完成后会在这里提示" : jobs.match ? "匹配分析中，完成后会在这里提示" : "";
+  const running = jobs.resume
+    ? { text: "定向简历生成中，可以先去做别的，完成后会在这里提示", href: "/match" }
+    : jobs.match
+      ? { text: "匹配分析中，完成后会在这里提示", href: "/match" }
+      : jobs.import
+        ? { text: "简历导入解析中，可以先去做别的，完成后会在这里提示", href: "/collect" }
+        : null;
 
   // 用户已经到了提示指向的页面，就不再需要这条提示
   useEffect(() => {
@@ -61,9 +67,9 @@ export function Nav() {
             ✕
           </button>
         </div>
-      ) : running && pathname !== "/match" ? (
+      ) : running && pathname !== running.href ? (
         <div role="status" className="mx-auto mt-2 max-w-5xl rounded-full border border-line bg-card/90 px-4 py-2 text-sm text-ink-soft backdrop-blur-xl">
-          <Link href="/match" className="underline-offset-4 hover:underline">{running}</Link>
+          <Link href={running.href} className="underline-offset-4 hover:underline">{running.text}</Link>
         </div>
       ) : null}
     </header>
