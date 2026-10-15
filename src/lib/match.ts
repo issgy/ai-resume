@@ -103,12 +103,21 @@ export function isPureYearsMissing(s: string, requirement = ""): boolean {
 export const COMPOUND_MISSING = "该条包含多项要求，未能逐项确认";
 
 /**
+ * 是否是没拆开的复合要求：分隔符与 MATCHER 提示词一致（；; 、 , ， 和 及 或 与 以及 等）。
+ * 宁缺勿滥：误判为复合只会把 full 降为 partial；只排除「及以上」「或以上」「参与」这类明显不是并列的写法。
+ */
+export function isCompoundRequirement(text: string): boolean {
+  const t = text.replace(/[及或]以上/g, "以上").replace(/参与/g, "");
+  return /[；;、,，和及或与等]/.test(t);
+}
+
+/**
  * 校验匹配结果（fail-closed，宁缺勿滥）：大模型的覆盖结论只能被降级、不会被升级。
  * - 结构异常（条目不是对象、factIds/missing 不是字符串数组、coverage 取值不对）一律按缺口处理；
  *   legacy 为 true 时允许没有 coverage 字段的旧数据，按 factIds 是否为空推断后同样走下面的校验
  * - 没有有效 factIds 的一律 none
- * - 要求里的英文技术名、缩写必须出现在所引事实的 text 或 source 中，否则降为 partial 并写入 missing
- * - 用「；」连在一起的复合要求不能整条判为 full
+ * - 要求里的英文技术名、缩写必须出现在所引事实的 source（用户原话）中，否则降为 partial 并写入 missing
+ * - 没拆开的复合要求（含「；」「、」「，」「和」「及」「或」「与」「等」等分隔符）不能整条判为 full
  * - 年限要求按所引事实所在经历的起止时间计算，不足或无法解析时不能是 full
  * raw 不是数组时返回 null，由调用方按失败处理。
  */
@@ -152,7 +161,8 @@ export function checkRequirements(
     // 模型自己列出了缺失点却又标 full，结论自相矛盾
     if (missing.length > 0) result = cap(result, "partial");
 
-    const evidence = cited.map(({ fact }) => `${fact.text} ${fact.source}`).join(" ");
+    // 只认用户原话 source；text 是 AI 整理的表述，可能已含幻觉（与 /api/verify 一致）
+    const evidence = cited.map(({ fact }) => fact.source).join(" ");
     const evidenceTerms = new Set((evidence.match(TERM_RE) ?? []).map((t) => t.toLowerCase()));
     const unknownTerms = [...new Set((text.match(TERM_RE) ?? []).filter((t) => !evidenceTerms.has(t.toLowerCase())))];
     if (unknownTerms.length > 0) {
@@ -160,7 +170,7 @@ export function checkRequirements(
       extra.push(...unknownTerms);
     }
 
-    if (/[；;]/.test(text)) {
+    if (isCompoundRequirement(text)) {
       result = cap(result, "partial");
       extra.push(COMPOUND_MISSING);
     }
