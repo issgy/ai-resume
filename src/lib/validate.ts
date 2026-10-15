@@ -148,14 +148,16 @@ export function applyQA(h: Highlight, raw: unknown, experiences: Experience[]): 
   const exp = experiences.find((e) => e.id === h.experienceId);
   if (!exp) return { dropped: { text: h.text, reason: "未关联到任何经历", factIds: h.factIds } };
   const facts = exp.facts.filter((f) => h.factIds.includes(f.id));
-  const parsed: QA[] = (Array.isArray(raw) ? raw : []).flatMap((item) => {
+  const items: unknown[] = Array.isArray(raw) ? raw : [];
+  const parsed: QA[] = items.flatMap((item) => {
     if (typeof item !== "object" || item === null) return [];
     const { q, a, factIds } = item as { q?: unknown; a?: unknown; factIds?: unknown };
     if (typeof q !== "string" || !q.trim() || typeof a !== "string" || !a.trim()) return [];
     const ids = Array.isArray(factIds) ? factIds.filter((id): id is string => typeof id === "string") : [];
     return [{ q: q.trim(), a, factIds: ids }];
   });
-  if (parsed.length === 0) return { dropped: { ...base, reason: QA_MISSING } };
+  // 有任何格式异常的条目（可能正是答不上来的那题）或不足 2 组问答（PRD 要求 2-3 个追问）时一律剔除，不挑着放行
+  if (parsed.length < 2 || parsed.length !== items.length) return { dropped: { ...base, reason: QA_MISSING } };
   const questions = parsed.map((qa) => checkAnswer(qa, exp.facts, facts));
   const reason = indefensibleReason(questions);
   if (reason) return { dropped: { ...base, reason } };
