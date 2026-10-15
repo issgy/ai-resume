@@ -30,10 +30,17 @@ export type Profile = {
 
 export type ChatMessage = { role: "user" | "assistant"; content: string };
 
+/** full：所引事实完整覆盖；partial：只覆盖一部分；none：缺口 */
+export type Coverage = "full" | "partial" | "none";
+
 export type Requirement = {
   text: string;
   type: "must" | "nice";
   factIds: string[];
+  /** 旧数据没有该字段，读取时按 factIds 是否为空推断，再经过 checkRequirements 同样的校验 */
+  coverage?: Coverage;
+  /** 要求中没有被所引事实覆盖的具体点；旧数据没有该字段 */
+  missing?: string[];
 };
 
 export type QA = {

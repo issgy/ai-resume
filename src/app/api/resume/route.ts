@@ -1,17 +1,21 @@
 import { NextResponse } from "next/server";
 import { callLLMJson } from "@/lib/llm";
 import { WRITER } from "@/lib/prompts";
+import { checkRequirements } from "@/lib/match";
 import { checkHighlights } from "@/lib/validate";
-import type { Experience, Highlight, Requirement } from "@/lib/types";
+import type { Experience, Highlight } from "@/lib/types";
 
 export const maxDuration = 60;
 
 export async function POST(req: Request) {
   const { jd, requirements, experiences } = (await req.json()) as {
     jd: string;
-    requirements: Requirement[];
+    requirements: unknown;
     experiences: Experience[];
   };
+  // 匹配表来自浏览器存储，可能是旧数据或被改过，按同一规则重新核对；只把核对后的覆盖程度和缺失点交给模型，
+  // 缺口和缺失点明确标出，避免模型为了贴合 JD 编造
+  const matchTable = checkRequirements(requirements, experiences, { legacy: true }) ?? [];
   const payload = experiences.map((e) => ({
     experienceId: e.id,
     company: e.company,
@@ -27,7 +31,7 @@ export async function POST(req: Request) {
           { role: "system", content: WRITER },
           {
             role: "user",
-            content: `## JD\n${jd}\n\n## 匹配表\n${JSON.stringify(requirements)}\n\n## 经历\n${JSON.stringify([p])}`,
+            content: `## JD\n${jd}\n\n## 匹配表\n${JSON.stringify(matchTable)}\n\n## 经历\n${JSON.stringify([p])}`,
           },
         ]),
       ),
