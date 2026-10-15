@@ -6,7 +6,7 @@ import { Button, Card, ErrorText, PageHeader } from "@/components/ui";
 import { isInAppBrowser, renderResume, saveFile, toPdf } from "@/lib/exportPdf";
 import { KEYS, useStored } from "@/lib/storage";
 import type { Experience, Profile, ResumeResult } from "@/lib/types";
-import { VERIFY_FAILED, VERIFY_MISSING, dropIndefensible, dropStale } from "@/lib/validate";
+import { QA_FAILED, QA_MISSING, VERIFY_FAILED, VERIFY_MISSING, dropIndefensible, dropStale } from "@/lib/validate";
 
 const EMPTY_PROFILE: Profile = { name: "", phone: "", email: "", school: "", birthday: "" };
 const FIELDS: [keyof Profile, string][] = [
@@ -60,6 +60,7 @@ export default function ResumePage() {
 
   const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, f] as const)));
   const verifyFailed = resume.dropped.some((d) => d.reason === VERIFY_FAILED || d.reason === VERIFY_MISSING);
+  const qaFailed = resume.dropped.some((d) => d.reason === QA_FAILED || d.reason === QA_MISSING);
   const sourceLabel = (id: string) => {
     const origin = factById.get(id)?.origin;
     return origin === "edited" ? "你在履历库手动修改为" : origin === "manual" ? "你手动补充" : "你说过";
@@ -120,6 +121,11 @@ export default function ResumePage() {
         {exportable && verifyFailed && (
           <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
             内容核验服务出错或超时，未能确认的亮点已剔除（见页面底部）。请稍后<Link href="/match" className="underline">重新生成</Link>。
+          </p>
+        )}
+        {exportable && qaFailed && (
+          <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            面试追问生成出错或超时，没拿到问答的亮点已剔除（见页面底部）。请稍后<Link href="/match" className="underline">重新生成</Link>。
           </p>
         )}
         {failedSections.length > 0 && (
