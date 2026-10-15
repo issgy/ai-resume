@@ -5,7 +5,14 @@ import { useRouter } from "next/navigation";
 import { Button, Card, ErrorText, PageHeader, postJson } from "@/components/ui";
 import { KEYS, useStored } from "@/lib/storage";
 import type { Experience, MatchResult, Requirement, ResumeResult } from "@/lib/types";
+import { checkRequirements } from "@/lib/match";
 import { failVerification } from "@/lib/validate";
+
+const STATUS = {
+  full: { label: "✓ 已覆盖", badge: "bg-emerald-100 text-emerald-700", row: "border-emerald-200 bg-emerald-50/40" },
+  partial: { label: "部分覆盖", badge: "bg-sky-100 text-sky-800", row: "border-sky-200 bg-sky-50/40" },
+  none: { label: "缺口", badge: "bg-amber-100 text-amber-800", row: "border-amber-200 bg-amber-50/40" },
+} as const;
 
 export default function MatchPage() {
   const router = useRouter();
@@ -19,6 +26,8 @@ export default function MatchPage() {
 
   const currentJd = jd || match?.jd || jdDraft;
   const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, { ...f, exp: e }] as const)));
+  // 存下的匹配结果（含没有 coverage 的旧数据）按当前履历库重新核对，结论只会被降级
+  const requirements: Requirement[] = match ? (checkRequirements(match.requirements, experiences, { legacy: true }) ?? []) : [];
 
   async function runMatch() {
     setError("");
@@ -38,7 +47,7 @@ export default function MatchPage() {
     setError("");
     setLoading("resume");
     try {
-      const data = await postJson<Pick<ResumeResult, "highlights" | "dropped" | "failedExperienceIds">>("/api/resume", { ...match, experiences });
+      const data = await postJson<Pick<ResumeResult, "highlights" | "dropped" | "failedExperienceIds">>("/api/resume", { jd: match.jd, requirements, experiences });
       // 规则校验通过的亮点再做一次大模型内容核验；核验请求整体失败时这批亮点全部剔除，不放行未核验内容
       let verified: Pick<ResumeResult, "highlights" | "dropped"> = { highlights: [], dropped: [] };
       if (data.highlights.length > 0) {
@@ -65,9 +74,9 @@ export default function MatchPage() {
     }
   }
 
-  const covered = match?.requirements.filter((r) => r.factIds.length > 0).length ?? 0;
-
-  const total = match?.requirements.length ?? 0;
+  // 只有完整覆盖的要求计入覆盖数
+  const covered = requirements.filter((r) => r.coverage === "full").length;
+  const total = requirements.length;
   const pct = total ? Math.round((covered / total) * 100) : 0;
 
   return (
@@ -109,28 +118,21 @@ export default function MatchPage() {
           </div>
 
           <ul className="space-y-3">
-            {match.requirements.map((r, i) => {
-              const hit = r.factIds.length > 0;
+            {requirements.map((r, i) => {
+              const status = STATUS[r.coverage ?? "none"];
               return (
-                <li
-                  key={i}
-                  className={`grid gap-3 rounded-2xl border p-4 sm:grid-cols-[2fr_3fr] ${
-                    hit ? "border-emerald-200 bg-emerald-50/40" : "border-amber-200 bg-amber-50/40"
-                  }`}
-                >
+                <li key={i} className={`grid gap-3 rounded-2xl border p-4 sm:grid-cols-[2fr_3fr] ${status.row}`}>
                   <div className="space-y-2">
                     <div className="flex flex-wrap gap-1.5">
                       <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${r.type === "must" ? "bg-ink text-white" : "bg-accent-soft text-accent"}`}>
                         {r.type === "must" ? "必须" : "加分"}
                       </span>
-                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${hit ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}`}>
-                        {hit ? "✓ 已覆盖" : "缺口"}
-                      </span>
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${status.badge}`}>{status.label}</span>
                     </div>
                     <div className="text-sm font-medium">{r.text}</div>
                   </div>
-                  <div className="text-sm">
-                    {!hit ? (
+                  <div className="space-y-2 text-sm">
+                    {r.coverage === "none" ? (
                       <span className="text-amber-800">履历库里没有对应经历，不会在简历中虚构</span>
                     ) : (
                       <ul className="space-y-1.5">
@@ -146,6 +148,11 @@ export default function MatchPage() {
                           ) : null;
                         })}
                       </ul>
+                    )}
+                    {r.coverage === "partial" && (
+                      <p className="text-amber-800">
+                        缺少：{r.missing?.length ? r.missing.join("、") : "未能确认完整覆盖"}，不会在简历中虚构
+                      </p>
                     )}
                   </div>
                 </li>
