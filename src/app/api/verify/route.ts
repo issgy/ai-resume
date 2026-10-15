@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { callLLMJson } from "@/lib/llm";
 import { VERIFIER } from "@/lib/prompts";
-import { applyVerification, failVerification, type VerifyResult } from "@/lib/validate";
+import { applyVerification, failVerification } from "@/lib/validate";
 import type { DroppedHighlight, Experience, Highlight } from "@/lib/types";
 
 export const maxDuration = 60;
@@ -27,11 +27,13 @@ export async function POST(req: Request) {
         highlights: items.map((h, index) => ({ index, text: h.text, factIds: h.factIds })),
       };
       try {
-        const data = await callLLMJson<{ results: VerifyResult[] }>([
+        const data = await callLLMJson<unknown>([
           { role: "system", content: VERIFIER },
           { role: "user", content: JSON.stringify(payload) },
         ]);
-        return applyVerification(items, Array.isArray(data.results) ? data.results : []);
+        // 响应结构未经保证，原样交给 applyVerification 严格校验
+        const results = typeof data === "object" && data !== null ? (data as { results?: unknown }).results : undefined;
+        return applyVerification(items, results);
       } catch {
         return { kept: [] as Highlight[], dropped: failVerification(items) };
       }

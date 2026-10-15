@@ -65,29 +65,56 @@ export function checkHighlights(raw: Highlight[], experiences: Experience[]) {
   return { kept, dropped };
 }
 
-/** 大模型内容核验对单条亮点的结论：unsupported 为亮点中在原话里找不到依据的说法 */
-export type VerifyResult = { index: number; unsupported?: unknown };
-
 export const VERIFY_FAILED = "内容核验服务出错或超时，未能确认这条亮点有据可查，请稍后重新生成";
 export const VERIFY_MISSING = "内容核验没有返回这条亮点的结论，请重新生成";
 
 /**
- * 按大模型核验结论筛选亮点（items 与 results 用下标对应）：
- * 核验明确指出无依据说法时剔除并写出这些说法；某条没有拿到结论时按核验失败剔除，不放行未核验的内容。
+ * 大模型返回的 results 只经过 JSON 解析，没有任何结构保证，这里严格校验后才采信：
+ * results 不是数组，或任一条目不是对象、index 不是 [0, count) 内的整数、index 重复，
+ * 说明结论与亮点的对应关系不可信，返回 null，整批按核验失败处理。
  */
-export function applyVerification(items: Highlight[], results: VerifyResult[]) {
+function indexVerifyResults(results: unknown, count: number): Map<number, unknown> | null {
+  if (!Array.isArray(results)) return null;
+  const byIndex = new Map<number, unknown>();
+  for (const r of results) {
+    if (typeof r !== "object" || r === null || Array.isArray(r)) return null;
+    const { index, unsupported } = r as { index?: unknown; unsupported?: unknown };
+    if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= count) return null;
+    if (byIndex.has(index)) return null;
+    byIndex.set(index, unsupported);
+  }
+  return byIndex;
+}
+
+/** unsupported 必须存在且是由非空字符串组成的数组（全部有依据时为空数组），否则返回 null 表示结论无效 */
+function parseUnsupported(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  if (!value.every((s) => typeof s === "string" && s.trim().length > 0)) return null;
+  return (value as string[]).map((s) => s.trim());
+}
+
+/**
+ * 按大模型核验结论筛选亮点（items 与 results 用下标对应）：
+ * 核验明确指出无依据说法时剔除并写出这些说法；某条没有拿到结论或结论格式不对时按核验失败剔除，
+ * 整体结构不可信时整批剔除，不放行未核验的内容。
+ */
+export function applyVerification(items: Highlight[], results: unknown) {
+  const byIndex = indexVerifyResults(results, items.length);
+  if (!byIndex) return { kept: [] as Highlight[], dropped: failVerification(items) };
+
   const kept: Highlight[] = [];
   const dropped: DroppedHighlight[] = [];
   items.forEach((h, i) => {
-    const r = results.find((x) => Number(x?.index) === i);
     const base = { text: h.text, experienceId: h.experienceId, factIds: h.factIds };
-    if (!r) {
+    if (!byIndex.has(i)) {
       dropped.push({ ...base, reason: VERIFY_MISSING });
       return;
     }
-    const unsupported = (Array.isArray(r.unsupported) ? r.unsupported : [])
-      .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
-      .map((s) => s.trim());
+    const unsupported = parseUnsupported(byIndex.get(i));
+    if (!unsupported) {
+      dropped.push({ ...base, reason: VERIFY_FAILED });
+      return;
+    }
     if (unsupported.length > 0) {
       dropped.push({ ...base, reason: `${[...new Set(unsupported)].map((s) => `「${s}」`).join("")}在你的原始描述中找不到依据` });
       return;
