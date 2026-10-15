@@ -23,7 +23,7 @@ export async function POST(req: Request) {
     facts: e.facts.map((f) => ({ id: f.id, text: f.text, source: f.source })),
   }));
   try {
-    // 每段经历单独并行生成：单次输出更短，总耗时约等于最慢的一段，避免整份简历一次生成超时
+    // 每段经历单独并行生成，且只输出亮点（不含面试问答）：单次输出更短，总耗时约等于最慢的一段，避免超时
     const targets = payload.filter((p) => p.facts.length > 0);
     const results = await Promise.allSettled(
       targets.map((p) =>
@@ -48,7 +48,9 @@ export async function POST(req: Request) {
         return r.status === "rejected" || !Array.isArray(r.value.highlights) || r.value.highlights.length === 0;
       })
       .map((p) => p.experienceId);
-    const { kept, dropped } = checkHighlights(ok.flat(), experiences);
+    // 这里只写亮点；问答在核验通过后由 /api/qa 生成，模型多给的 questions 一律丢弃
+    const raw = ok.flat().map((h) => ({ experienceId: h.experienceId, text: h.text, factIds: h.factIds, questions: [] }));
+    const { kept, dropped } = checkHighlights(raw, experiences);
     return NextResponse.json({ highlights: kept, dropped, failedExperienceIds });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });

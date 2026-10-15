@@ -119,7 +119,13 @@ export default function MatchPage() {
           </ul>
           <div className="flex justify-end">
             <Button variant="accent" className="!px-6 !py-3" onClick={() => runResume(match.jd, requirements, experiences)} disabled={!!loading}>
-              {loading === "resume" ? "生成中，约需 20-40 秒…" : loading === "verify" ? "正在核验亮点是否都出自你的原话…" : "生成定向简历 →"}
+              {loading === "resume"
+                ? "生成亮点中…"
+                : loading === "verify"
+                  ? "核验中：检查亮点是否都出自你的原话…"
+                  : loading === "qa"
+                    ? "准备面试追问中…"
+                    : "生成定向简历 →"}
             </Button>
           </div>
         </Card>
