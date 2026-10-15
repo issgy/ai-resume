@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { DemoButton } from "@/components/demo-button";
 
 const steps = [
   { n: "01", title: "对话录入", desc: "像聊天一样讲经历，AI 追问细节和数字" },
@@ -32,9 +33,7 @@ export default function Home() {
             >
               开始录入 <span aria-hidden>→</span>
             </Link>
-            <Link href="/vault" className="rounded-full border border-line bg-card px-6 py-3 text-sm font-medium transition hover:border-ink">
-              查看履历库
-            </Link>
+            <DemoButton />
           </div>
           <p className="text-xs text-muted">数据只保存在你当前浏览器里，可在履历库页导出备份。</p>
         </div>

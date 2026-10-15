@@ -30,7 +30,14 @@ export type Requirement = {
   factIds: string[];
 };
 
-export type QA = { q: string; a: string };
+export type QA = {
+  q: string;
+  a: string;
+  /** 参考回答依据的事实 id */
+  factIds?: string[];
+  /** 参考回答没通过校验、已替换为补充提示 */
+  insufficient?: boolean;
+};
 
 export type Highlight = {
   experienceId: string;

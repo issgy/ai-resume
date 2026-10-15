@@ -11,11 +11,12 @@ export default function MatchPage() {
   const [experiences] = useStored<Experience[]>(KEYS.experiences, []);
   const [match, setMatch] = useStored<MatchResult | null>(KEYS.match, null);
   const [, setResume] = useStored<ResumeResult | null>(KEYS.resume, null);
+  const [jdDraft] = useStored<string>(KEYS.jdDraft, "");
   const [jd, setJd] = useState("");
   const [loading, setLoading] = useState<"" | "match" | "resume">("");
   const [error, setError] = useState("");
 
-  const currentJd = jd || match?.jd || "";
+  const currentJd = jd || match?.jd || jdDraft;
   const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, { ...f, exp: e }] as const)));
 
   async function runMatch() {

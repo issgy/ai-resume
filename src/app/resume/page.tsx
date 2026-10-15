@@ -152,7 +152,7 @@ export default function ResumePage() {
                         {h.questions.map((q, j) => (
                           <div key={j} className="mt-1">
                             <div>Q：{q.q}</div>
-                            <div className="text-slate-500">A：{q.a}</div>
+                            <div className={q.insufficient ? "text-amber-700" : "text-slate-500"}>A：{q.a}</div>
                           </div>
                         ))}
                       </div>

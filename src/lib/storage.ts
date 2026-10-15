@@ -8,6 +8,8 @@ export const KEYS = {
   chat: "air:chat",
   match: "air:match",
   resume: "air:resume",
+  /** 预填到匹配页的 JD 草稿（示例数据用） */
+  jdDraft: "air:jdDraft",
 } as const;
 
 function read<T>(key: string, fallback: T): T {
