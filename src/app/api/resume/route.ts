@@ -32,7 +32,7 @@ export async function POST(req: Request) {
         ]),
       ),
     );
-    const ok = results.filter((r) => r.status === "fulfilled").map((r) => r.value.highlights ?? []);
+    const ok = results.filter((r) => r.status === "fulfilled").map((r) => (Array.isArray(r.value.highlights) ? r.value.highlights : []));
     if (ok.length === 0) {
       const first = results.find((r) => r.status === "rejected");
       throw first?.reason ?? new Error("没有可生成的经历");
