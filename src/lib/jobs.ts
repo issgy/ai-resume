@@ -30,8 +30,8 @@ export type ImportSummary = {
   rejected: number;
   /** 填充了的个人信息字段（中文名） */
   profileFields: string[];
-  failedChunks: number;
-  totalChunks: number;
+  /** 没能归到具体经历、已放入「未归类」的行数 */
+  unassigned: number;
 };
 
 export type JobsState = {
@@ -190,7 +190,7 @@ function applyImport(data: ImportResponse): ImportSummary {
   }
   if (profileFields.length > 0) writeStored(KEYS.profile, profile);
 
-  return { added, merged, facts, duplicates, rejected: data.rejected, profileFields, failedChunks: data.failedChunks, totalChunks: data.totalChunks };
+  return { added, merged, facts, duplicates, rejected: data.rejected, profileFields, unassigned: data.unassigned };
 }
 
 export async function runImport(text: string) {
@@ -200,7 +200,7 @@ export async function runImport(text: string) {
   try {
     const data = await postJson<ImportResponse>("/api/import", { text });
     const summary = applyImport(data);
-    const partial = summary.failedChunks > 0 ? "，有部分内容解析失败" : "";
+    const partial = summary.unassigned > 0 ? "，有部分内容没能归到具体经历" : "";
     update({
       import: null,
       importSummary: summary,
