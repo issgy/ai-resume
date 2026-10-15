@@ -27,9 +27,9 @@ export function requiredYears(text: string): number | null {
     if (!Number.isFinite(n) || n <= 0 || n > 40) continue;
     if (!m[2] && !/经验|经历|工作|年限|从业/.test(text)) continue;
     // 「3 年以下」「3 年以内」「不超过 3 年」是上限而不是下限，不按最低年限校验
-    const before = text.slice(Math.max(0, m.index! - 4), m.index);
-    const after = text.slice(m.index! + m[0].length, m.index! + m[0].length + 2);
-    if (/^\s*(以下|以内|之内|内)/.test(after) || /(不超过|不多于|不高于|最多|至多|少于|低于|不满)\s*$/.test(before)) continue;
+    const before = text.slice(Math.max(0, m.index! - 6), m.index);
+    const after = text.slice(m.index! + m[0].length, m.index! + m[0].length + 4);
+    if (/^\s*[及或]?\s*(以下|以内|之内|内)/.test(after) || /(不得超过|不能超过|不可超过|不超过|不多于|不高于|最多|至多|少于|低于|不满)\s*$/.test(before)) continue;
     max = max === null ? n : Math.max(max, n);
   }
   return max;
@@ -111,7 +111,7 @@ export const COMPOUND_MISSING = "该条包含多项要求，未能逐项确认";
  * 宁缺勿滥：误判为复合只会把 full 降为 partial；只排除「及以上」「或以上」「参与」这类明显不是并列的写法。
  */
 export function isCompoundRequirement(text: string): boolean {
-  const t = text.replace(/[及或]以上/g, "以上").replace(/参与/g, "");
+  const t = text.replace(/[及或](以上|以下|以内)/g, "$1").replace(/参与/g, "");
   return /[；;、,，和及或与等]/.test(t);
 }
 
