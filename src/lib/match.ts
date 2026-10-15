@@ -26,6 +26,10 @@ export function requiredYears(text: string): number | null {
     // 只认带「以上」「+」或出现在经验/工作年限语境里的年数，避免把「2020 年」这类年份当年限
     if (!Number.isFinite(n) || n <= 0 || n > 40) continue;
     if (!m[2] && !/经验|经历|工作|年限|从业/.test(text)) continue;
+    // 「3 年以下」「3 年以内」「不超过 3 年」是上限而不是下限，不按最低年限校验
+    const before = text.slice(Math.max(0, m.index! - 4), m.index);
+    const after = text.slice(m.index! + m[0].length, m.index! + m[0].length + 2);
+    if (/^\s*(以下|以内|之内|内)/.test(after) || /(不超过|不多于|不高于|最多|至多|少于|低于|不满)\s*$/.test(before)) continue;
     max = max === null ? n : Math.max(max, n);
   }
   return max;
