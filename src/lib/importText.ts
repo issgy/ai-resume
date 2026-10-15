@@ -43,7 +43,7 @@ export const HEADER_RE = /(19|20)\d{2}\s*[./\-年]?\s*\d{0,2}\s*月?\s*[-–—~
 export const BULLET_RE = /^\s*(?:[-–—*](?=\s)|[•·●○■□▪]|\d{1,2}[.、)）](?![\d.])|[（(]\d{1,2}[)）])\s*/;
 
 /** 板块标题行，如「教育经历」「工作经历」「【项目经验】」 */
-const SECTION_RE = /^[\s#*【\[]*([\u4e00-\u9fa5A-Za-z ]{2,12})[\]】:：\s]*$/;
+const SECTION_RE = /^[\s#*【\[]*([\u4e00-\u9fa5A-Za-z ]{2,30})[\]】:：\s]*$/;
 /** 只认常见的板块名，避免把单独一行的学校名、公司名、人名当成板块标题 */
 const SECTION_NAME_RE =
   /^((教育|学习)(经历|背景|情况)?|学历|(工作|实习|实践|社会实践|校园|科研)(经历|经验)?|(主要)?项目(经历|经验)?|(专业|个人)?技能(特长|清单)?|技术栈|(个人|基本)(信息|资料)|自我评价|个人(简介|总结|优势)|荣誉(奖项)?|获奖(情况|经历)?|(资格)?证书|培训经历|语言能力|兴趣爱好|求职意向|其他|education|(work |professional )?experience|projects?|skills?)$/i;
@@ -66,7 +66,8 @@ function markHeaders(lines: string[]): boolean[] {
       inEducation = EDU_SECTION_RE.test(section[1].trim());
       return false;
     }
-    return HEADER_RE.test(line) && !inEducation && !EDUCATION_RE.test(line);
+    // 正文里也可能出现年份区间（如「- 制定 2022-2024 年产品规划」），标题行必须较短且不以项目符号开头
+    return HEADER_RE.test(line) && line.trim().length <= 60 && !BULLET_RE.test(line) && !inEducation && !EDUCATION_RE.test(line);
   });
 }
 
@@ -106,6 +107,8 @@ export function splitResume(text: string): ResumeChunk[] {
   };
   lines.forEach((s, i) => {
     if (!s.trim()) return flush();
+    // 板块标题前没有空行时也要另起一段，否则「技能」「教育经历」会混进上一段经历
+    if (isSectionLabel(s) && cur.length) flush();
     if (isHeader[i] && cur.length) {
       // 「公司 / 岗位 / 日期」分行写时，日期前紧挨着的短行（公司、岗位）属于这段经历，一起带走
       const carry: Line[] = [];
