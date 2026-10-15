@@ -151,7 +151,8 @@ function applyImport(data: ImportResponse): ImportSummary {
   let duplicates = 0;
   for (const imp of data.experiences) {
     const key = experienceKey(imp);
-    const idx = key ? experiences.findIndex((e) => experienceKey(e) === key) : -1;
+    // 没有公司和岗位的「未归类」内容也合并到已有的未归类经历，重复导入时不再多出一段
+    const idx = experiences.findIndex((e) => experienceKey(e) === key);
     const existing = idx >= 0 ? experiences[idx] : null;
     // 原文或整理后的文字任一相同都算重复（忽略行首项目符号），避免重复导入同一份简历时多出事实
     const strip = (s: string) => norm(s.replace(BULLET_RE, ""));

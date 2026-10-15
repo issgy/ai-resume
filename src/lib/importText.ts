@@ -43,7 +43,9 @@ export const BULLET_RE = /^\s*(?:[-–—*](?=\s)|[•·●○■□▪]|\d{1,2}
 
 /** 板块标题行，如「教育经历」「工作经历」「【项目经验】」 */
 const SECTION_RE = /^[\s#*【\[]*([\u4e00-\u9fa5A-Za-z ]{2,12})[\]】:：\s]*$/;
-const EDU_SECTION_RE = /^(教育|学历|学习)/;
+/** 只认常见的板块名，避免把单独一行的学校名、公司名、人名当成板块标题 */
+const SECTION_NAME_RE = /^(教育|学历|学习|工作|实习|项目|技能|专业技能|个人|基本|自我|荣誉|证书|获奖|校园|社会|培训|语言|兴趣|其他|主要|相关|求职|Education|Experience|Projects?|Skills?|Work)/i;
+const EDU_SECTION_RE = /^(教育|学历|学习|Education)/i;
 
 /**
  * 标出每行是否为工作/项目经历标题：含年份起止、本行不含学历关键词，且不在「教育经历」板块里
@@ -53,7 +55,7 @@ function markHeaders(lines: string[]): boolean[] {
   let inEducation = false;
   return lines.map((line) => {
     const section = line.trim().match(SECTION_RE);
-    if (section && !HEADER_RE.test(line)) {
+    if (section && SECTION_NAME_RE.test(section[1].trim()) && !HEADER_RE.test(line)) {
       inEducation = EDU_SECTION_RE.test(section[1].trim());
       return false;
     }
@@ -87,7 +89,8 @@ export function splitResume(text: string): ResumeChunk[] {
   const total = isHeader.filter(Boolean).length;
   if (text.length <= SPLIT_OVER && total <= 1) return [{ text, expected: total }];
 
-  type Line = { s: string; h: boolean };
+  /** h：经历标题行；c：硬切后的续块里复制的标题行（续块至少应解析出一段经历） */
+  type Line = { s: string; h: boolean; c?: boolean };
   const blocks: Line[][] = [];
   let cur: Line[] = [];
   const flush = () => {
@@ -106,7 +109,9 @@ export function splitResume(text: string): ResumeChunk[] {
   const size = (b: Line[]) => b.reduce((n, l) => n + l.s.length + 1, 0);
   const emit = () => {
     const t = buf.map((l) => l.s).join("\n").trim();
-    if (t) chunks.push({ text: t, expected: buf.filter((l) => l.h).length });
+    const headers = buf.filter((l) => l.h).length;
+    const continuation = buf.some((l) => l.c) && buf.length > 1;
+    if (t) chunks.push({ text: t, expected: Math.max(headers, continuation ? 1 : 0) });
     buf = [];
   };
   for (const block of blocks) {
@@ -122,7 +127,7 @@ export function splitResume(text: string): ResumeChunk[] {
       if (buf.length && size(buf) + piece.s.length + 1 > CHUNK_TARGET) {
         emit();
         // 复制过来的标题行只为提供上下文，不重复计入应解析的经历段数
-        if (header && header.length < CHUNK_TARGET) buf.push({ s: header, h: false });
+        if (header && header.length < CHUNK_TARGET) buf.push({ s: header, h: false, c: true });
       }
       buf.push(piece);
     }
