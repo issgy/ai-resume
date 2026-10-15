@@ -153,10 +153,16 @@ function applyImport(data: ImportResponse): ImportSummary {
     const key = experienceKey(imp);
     const idx = key ? experiences.findIndex((e) => experienceKey(e) === key) : -1;
     const existing = idx >= 0 ? experiences[idx] : null;
-    const seen = new Set((existing?.facts ?? []).map((f) => norm(f.source)));
+    // 原文或整理后的文字任一相同都算重复（忽略行首项目符号），避免重复导入同一份简历时多出事实
+    const strip = (s: string) => norm(s.replace(/^\s*(?:[-–—•·*●○■□▪]|\d{1,2}[.、)）])\s*/, ""));
+    const seen = new Set((existing?.facts ?? []).flatMap((f) => [strip(f.source), strip(f.text)]));
     const fresh = imp.facts
       .filter((f) => {
-        const dup = seen.has(norm(f.source));
+        const dup = seen.has(strip(f.source)) || seen.has(strip(f.text));
+        if (!dup) {
+          seen.add(strip(f.source));
+          seen.add(strip(f.text));
+        }
         if (dup) duplicates++;
         return !dup;
       })
