@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { callLLMJson } from "@/lib/llm";
 import { IMPORTER } from "@/lib/prompts";
-import { NUM_RE, TERM_RE, norm, sourceInUserText } from "@/lib/validate";
+import { norm, sourceInUserText } from "@/lib/validate";
 import { BULLET_RE, IMPORT_MAX, IMPORT_MIN, experienceKey, splitResume } from "@/lib/importText";
 import type { ImportResponse, ImportedExperience, ResumeChunk } from "@/lib/importText";
 import type { Profile } from "@/lib/types";
@@ -69,9 +69,11 @@ export async function POST(req: Request) {
       };
       for (const f of Array.isArray(r.facts) ? r.facts : []) {
         // 去掉行首的项目符号/序号，否则同一句话带不带「- 」会被当成两条事实（去掉后仍是原文的连续片段）
-        const source = str(f?.source).replace(BULLET_RE, "");
-        // text 为空表示与原文相同，直接用原文，减少模型输出长度
-        const fact = { text: safeText(str(f?.text).replace(BULLET_RE, ""), source), source };
+        // 模型偶尔把事实直接写成字符串或放在 text 字段里；无论哪种写法，都必须能在原文中逐字找到
+        const raw = typeof f === "string" ? f : str(f?.source) || str(f?.text);
+        const source = raw.trim().replace(BULLET_RE, "");
+        // 导入的事实一律保存原文：模型只负责从原文中挑出片段并拆分，不保存任何改写，从根本上避免改变原意
+        const fact = { text: source, source };
         if (fact.text && sourceInUserText(fact.source, text)) exp.facts.push(fact);
         else rejected++;
       }
@@ -93,23 +95,6 @@ export async function POST(req: Request) {
 
   const body: ImportResponse = { experiences: merged, profile, rejected, failedChunks, totalChunks: chunks.length };
   return NextResponse.json(body);
-}
-
-/** 拔高角色或程度的说法：整理后的文字里出现、原文里却没有时，视为美化 */
-const INFLATE_RE = /主导|牵头|带领|领导|负责人|独立完成|独立负责|从0到1|从零到一|大幅|显著|极大|全面|核心|首创|精通/g;
-
-/**
- * 整理后的文字只允许拆分和轻度整理：出现原文没有的数字、英文技术名词或拔高说法时，直接改用原文。
- * 不剔除、不需要用户确认（产品决策：导入内容直接入库），但保证入库的文字不比原文多说什么。
- */
-function safeText(text: string, source: string): string {
-  if (!text) return source;
-  const nums = new Set(source.match(NUM_RE) ?? []);
-  const terms = new Set((source.match(TERM_RE) ?? []).map((t) => t.toLowerCase()));
-  const newNum = (text.match(NUM_RE) ?? []).some((n) => !nums.has(n));
-  const newTerm = (text.match(TERM_RE) ?? []).some((t) => !terms.has(t.toLowerCase()));
-  const inflated = (text.match(INFLATE_RE) ?? []).some((w) => !source.includes(w));
-  return newNum || newTerm || inflated ? source : text;
 }
 
 /** 块与块之间的重复：同一句原文可能被拆成几条事实，所以按 source + text 去重 */
