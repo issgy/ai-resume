@@ -103,7 +103,7 @@ function PasteImport() {
             <li>{s.profileFields.length > 0 ? `个人信息填充了：${s.profileFields.join("、")}` : "个人信息没有需要填充的字段（已填写的不会被覆盖）"}</li>
             {s.failedChunks > 0 && (
               <li className="text-warn">
-                原文分 {s.totalChunks} 段解析，其中 {s.failedChunks} 段解析失败，这部分内容没有导入，可以只粘贴缺失的部分再导入一次
+                原文分 {s.totalChunks} 段解析，其中 {s.failedChunks} 段解析失败或不完整，请到履历库核对，缺失的部分可以单独粘贴再导入一次（已导入的内容不会重复）
               </li>
             )}
           </ul>

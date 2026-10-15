@@ -3,7 +3,7 @@
 import { useSyncExternalStore } from "react";
 import { postJson } from "@/components/ui";
 import { KEYS, read, uid, writeStored } from "@/lib/storage";
-import { experienceKey } from "@/lib/importText";
+import { BULLET_RE, experienceKey } from "@/lib/importText";
 import type { ImportResponse } from "@/lib/importText";
 import type { Experience, Profile, Requirement, ResumeResult } from "@/lib/types";
 import { failQA, failVerification, norm } from "@/lib/validate";
@@ -154,7 +154,7 @@ function applyImport(data: ImportResponse): ImportSummary {
     const idx = key ? experiences.findIndex((e) => experienceKey(e) === key) : -1;
     const existing = idx >= 0 ? experiences[idx] : null;
     // 原文或整理后的文字任一相同都算重复（忽略行首项目符号），避免重复导入同一份简历时多出事实
-    const strip = (s: string) => norm(s.replace(/^\s*(?:[-–—•·*●○■□▪]|\d{1,2}[.、)）])\s*/, ""));
+    const strip = (s: string) => norm(s.replace(BULLET_RE, ""));
     const seen = new Set((existing?.facts ?? []).flatMap((f) => [strip(f.source), strip(f.text)]));
     const fresh = imp.facts
       .filter((f) => {

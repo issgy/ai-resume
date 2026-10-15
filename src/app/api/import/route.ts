@@ -2,15 +2,13 @@ import { NextResponse } from "next/server";
 import { callLLMJson } from "@/lib/llm";
 import { IMPORTER } from "@/lib/prompts";
 import { norm, sourceInUserText } from "@/lib/validate";
-import { IMPORT_MAX, IMPORT_MIN, countHeaders, experienceKey, splitResume } from "@/lib/importText";
-import type { ImportResponse, ImportedExperience } from "@/lib/importText";
+import { BULLET_RE, IMPORT_MAX, IMPORT_MIN, experienceKey, splitResume } from "@/lib/importText";
+import type { ImportResponse, ImportedExperience, ResumeChunk } from "@/lib/importText";
 import type { Profile } from "@/lib/types";
 
 export const maxDuration = 60;
 
 type Parsed = { profile?: Partial<Record<keyof Profile, unknown>>; experiences?: unknown };
-
-const BULLET_RE = /^\s*(?:[-–—•·*●○■□▪]|\d{1,2}[.、)）]|[（(]\d{1,2}[)）])\s*/;
 
 const UNASSIGNED = "\u0000unassigned";
 
@@ -31,11 +29,14 @@ export async function POST(req: Request) {
   if (text.length < IMPORT_MIN) return NextResponse.json({ error: `内容太短（至少 ${IMPORT_MIN} 字）` }, { status: 400 });
   if (text.length > IMPORT_MAX) return NextResponse.json({ error: `内容太长（最多 ${IMPORT_MAX} 字）` }, { status: 400 });
 
-  // 较长的原文切块并行解析，任一块失败不影响其他块
+  // 切块并行解析，任一块失败不影响其他块；所有块共用一个截止时间，保证整个请求在 maxDuration 内返回部分结果
+  const deadline = Date.now() + DEADLINE_MS;
   const chunks = splitResume(text);
-  const settled = await Promise.allSettled(chunks.map((chunk) => parseChunk(chunk)));
-  const parsed = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
-  const failedChunks = chunks.length - parsed.length;
+  const settled = await Promise.allSettled(chunks.map((chunk) => parseChunk(chunk, deadline)));
+  const results = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []));
+  const parsed = results.map((r) => r.parsed);
+  // 失败的块 + 解析不完整（有经历标题却没解析出对应经历）的块；不完整的块已解析出的内容照常保留
+  const failedChunks = chunks.length - results.length + results.filter((r) => !r.complete).length;
   if (parsed.length === 0) {
     const reason = settled.find((r): r is PromiseRejectedResult => r.status === "rejected")?.reason;
     return NextResponse.json({ error: (reason as Error)?.message || "解析失败，请重试" }, { status: 500 });
@@ -58,7 +59,14 @@ export async function POST(req: Request) {
     for (const e of Array.isArray(p.experiences) ? p.experiences : []) {
       if (!e || typeof e !== "object") continue;
       const r = e as Record<string, unknown>;
-      const exp: ImportedExperience = { company: field(r.company, text), title: field(r.title, text), start: str(r.start), end: str(r.end), facts: [] };
+      // 公司、岗位、起止时间都会原样出现在导出的简历上，必须能在原文中找到
+      const exp: ImportedExperience = {
+        company: field(r.company, text),
+        title: field(r.title, text),
+        start: field(r.start, text),
+        end: field(r.end, text),
+        facts: [],
+      };
       for (const f of Array.isArray(r.facts) ? r.facts : []) {
         // 去掉行首的项目符号/序号，否则同一句话带不带「- 」会被当成两条事实（去掉后仍是原文的连续片段）
         const source = str(f?.source).replace(BULLET_RE, "");
@@ -105,25 +113,52 @@ function experienceCount(p: Parsed) {
   ).length;
 }
 
+/** 整个请求的解析截止时间：留出余量，保证在路由 maxDuration=60s 之前返回 */
+const DEADLINE_MS = 52_000;
+/** 剩余时间不足这么多就不再重试 */
+const RETRY_MIN_MS = 15_000;
+
+function withDeadline<T>(p: Promise<T>, deadline: number): Promise<T> {
+  const ms = deadline - Date.now();
+  if (ms <= 0) return Promise.reject(new Error("解析超时"));
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("解析超时")), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/** 模型返回必须是对象且 experiences 是数组；[] 或缺字段说明格式不对，按失败处理而不是当作「什么都没解析到」 */
+function isParsed(v: unknown): v is Parsed {
+  return !!v && typeof v === "object" && !Array.isArray(v) && Array.isArray((v as Parsed).experiences);
+}
+
 /**
- * 解析一块原文。块里有经历标题、模型却少返回了经历时重试一次；仍然不全就按失败处理，
- * 由调用方提示「部分内容解析失败」，不静默漏掉整段经历。
+ * 解析一块原文。块里有经历标题、模型却少返回了经历时，在剩余时间充足时重试一次；
+ * 仍不完整就保留已解析的内容并标记为不完整，由界面提示「部分内容解析失败」，不静默漏掉整段经历。
  */
-async function parseChunk(chunk: string): Promise<Parsed> {
-  const expected = countHeaders(chunk);
+async function parseChunk(chunk: ResumeChunk, deadline: number): Promise<{ parsed: Parsed; complete: boolean }> {
+  let best: Parsed | null = null;
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0 && deadline - Date.now() < RETRY_MIN_MS) break;
     try {
-      const p = await callLLMJson<Parsed>([
-        { role: "system", content: IMPORTER },
-        { role: "user", content: chunk },
-      ]);
-      if (!p || typeof p !== "object") throw new Error("解析结果格式不对");
-      if (experienceCount(p) >= expected) return p;
-      lastError = new Error("有经历没有解析出来");
+      const p = await withDeadline(
+        callLLMJson<unknown>([
+          { role: "system", content: IMPORTER },
+          { role: "user", content: chunk.text },
+        ]),
+        deadline,
+      );
+      if (!isParsed(p)) throw new Error("解析结果格式不对");
+      if (experienceCount(p) >= chunk.expected) return { parsed: p, complete: true };
+      if (!best || experienceCount(p) > experienceCount(best)) best = p;
     } catch (e) {
       lastError = e;
     }
   }
-  throw lastError;
+  if (best) return { parsed: best, complete: false };
+  throw lastError ?? new Error("解析失败");
 }
