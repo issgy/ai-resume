@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button, Card, ErrorText, PageHeader, postJson } from "@/components/ui";
+import { Button, Card, ErrorText, PageHeader } from "@/components/ui";
 import { KEYS, useStored } from "@/lib/storage";
-import type { Experience, MatchResult, Requirement, ResumeResult } from "@/lib/types";
+import type { Experience, MatchResult, Requirement } from "@/lib/types";
 import { checkRequirements } from "@/lib/match";
-import { failVerification } from "@/lib/validate";
+import { attachResumeRedirect, runMatch, runResume, useJobs } from "@/lib/jobs";
 
 const STATUS = {
   full: { label: "✓ 已覆盖", badge: "bg-emerald-100 text-emerald-700", row: "border-emerald-200 bg-emerald-50/40" },
@@ -17,62 +17,20 @@ const STATUS = {
 export default function MatchPage() {
   const router = useRouter();
   const [experiences] = useStored<Experience[]>(KEYS.experiences, []);
-  const [match, setMatch] = useStored<MatchResult | null>(KEYS.match, null);
-  const [, setResume] = useStored<ResumeResult | null>(KEYS.resume, null);
+  const [match] = useStored<MatchResult | null>(KEYS.match, null);
   const [jdDraft] = useStored<string>(KEYS.jdDraft, "");
   const [jd, setJd] = useState("");
-  const [loading, setLoading] = useState<"" | "match" | "resume" | "verify">("");
-  const [error, setError] = useState("");
+  // 任务在 jobs 模块里后台运行，离开本页不会中断；回到本页时仍能看到进行中的阶段
+  const jobs = useJobs();
+  const loading = jobs.resume ?? jobs.match ?? "";
 
   const currentJd = jd || match?.jd || jdDraft;
   const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, { ...f, exp: e }] as const)));
   // 存下的匹配结果（含没有 coverage 的旧数据）按当前履历库重新核对，结论只会被降级
   const requirements: Requirement[] = match ? (checkRequirements(match.requirements, experiences, { legacy: true }) ?? []) : [];
 
-  async function runMatch() {
-    setError("");
-    setLoading("match");
-    try {
-      const { requirements } = await postJson<{ requirements: Requirement[] }>("/api/match", { jd: currentJd, experiences });
-      setMatch({ jd: currentJd, requirements });
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading("");
-    }
-  }
-
-  async function runResume() {
-    if (!match) return;
-    setError("");
-    setLoading("resume");
-    try {
-      const data = await postJson<Pick<ResumeResult, "highlights" | "dropped" | "failedExperienceIds">>("/api/resume", { jd: match.jd, requirements, experiences });
-      // 规则校验通过的亮点再做一次大模型内容核验；核验请求整体失败时这批亮点全部剔除，不放行未核验内容
-      let verified: Pick<ResumeResult, "highlights" | "dropped"> = { highlights: [], dropped: [] };
-      if (data.highlights.length > 0) {
-        setLoading("verify");
-        try {
-          verified = await postJson<Pick<ResumeResult, "highlights" | "dropped">>("/api/verify", { highlights: data.highlights, experiences });
-        } catch {
-          verified = { highlights: [], dropped: failVerification(data.highlights) };
-        }
-      }
-      setResume({
-        jd: match.jd,
-        highlights: verified.highlights,
-        dropped: [...data.dropped, ...verified.dropped],
-        failedExperienceIds: data.failedExperienceIds ?? [],
-        // 只有上面核验通过的 highlights 会被导出；简历页不会把未核验的履历事实写进正文
-        provenanceChecked: true,
-      });
-      router.push("/resume");
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading("");
-    }
-  }
+  // 生成完成时用户仍在本页才跳转到简历页；已离开则由顶部导航提示，不强行拽走
+  useEffect(() => attachResumeRedirect(() => router.push("/resume")), [router]);
 
   // 只有完整覆盖的要求计入覆盖数
   const covered = requirements.filter((r) => r.coverage === "full").length;
@@ -93,12 +51,12 @@ export default function MatchPage() {
         />
         <div className="flex items-center justify-between gap-3">
           <span className="text-xs text-muted">{currentJd.trim().length} 字</span>
-          <Button variant="accent" onClick={runMatch} disabled={!!loading || !currentJd.trim()}>
+          <Button variant="accent" onClick={() => runMatch(currentJd, experiences)} disabled={!!loading || !currentJd.trim()}>
             {loading === "match" ? "分析中…" : "分析匹配"}
           </Button>
         </div>
       </Card>
-      <ErrorText>{error}</ErrorText>
+      <ErrorText>{jobs.error}</ErrorText>
 
       {match && (
         <Card className="animate-rise space-y-5">
@@ -160,7 +118,7 @@ export default function MatchPage() {
             })}
           </ul>
           <div className="flex justify-end">
-            <Button variant="accent" className="!px-6 !py-3" onClick={runResume} disabled={!!loading}>
+            <Button variant="accent" className="!px-6 !py-3" onClick={() => runResume(match.jd, requirements, experiences)} disabled={!!loading}>
               {loading === "resume" ? "生成中，约需 20-40 秒…" : loading === "verify" ? "正在核验亮点是否都出自你的原话…" : "生成定向简历 →"}
             </Button>
           </div>

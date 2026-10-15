@@ -24,6 +24,9 @@ export default function CollectPage() {
   const [draft, setDraft] = useState<Extracted | null>(null);
   const [error, setError] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
+  /** 进行中的流式回复；离开页面时中止，避免旧回复在后台继续写入、覆盖回来后的新对话 */
+  const stream = useRef<AbortController | null>(null);
+  useEffect(() => () => stream.current?.abort(), []);
 
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth" });
@@ -37,8 +40,12 @@ export default function CollectPage() {
     const next: ChatMessage[] = [...messages, { role: "user", content: text }];
     setMessages([...next, { role: "assistant", content: "" }]);
     setStreaming(true);
+    const ctrl = new AbortController();
+    stream.current = ctrl;
+    let reply = "";
     try {
       const res = await fetch("/api/chat", {
+        signal: ctrl.signal,
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ messages: next }),
@@ -50,20 +57,26 @@ export default function CollectPage() {
       }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let reply = "";
       for (;;) {
         const { done, value } = await reader.read();
+        if (ctrl.signal.aborted) throw new DOMException("aborted", "AbortError");
         if (done) break;
         reply += decoder.decode(value, { stream: true });
         setMessages([...next, { role: "assistant", content: reply }]);
       }
     } catch (e) {
+      if (ctrl.signal.aborted) {
+        // 离开页面导致中止：保留用户这条发言和已收到的部分回复并注明中断，不再回滚（回滚会覆盖之后的新对话）
+        setMessages([...next, { role: "assistant", content: `${reply}${reply ? "\n\n" : ""}（回复因离开页面而中断，可以继续补充或重新提问）` }]);
+        return;
+      }
       // 流式输出中途断开时浏览器只给出 TypeError，换成可读提示
       setError(e instanceof TypeError ? "连接中断或模型响应超时，请重试" : (e as Error).message || "对话失败");
       // 撤回这条发言并放回输入框，用户可以直接重发
       setMessages(messages);
       setInput(text);
     } finally {
+      if (stream.current === ctrl) stream.current = null;
       setStreaming(false);
     }
   }
