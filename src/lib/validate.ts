@@ -161,7 +161,8 @@ export function applyQA(h: Highlight, raw: unknown, experiences: Experience[]): 
   const questions = parsed.map((qa) => checkAnswer(qa, exp.facts, facts));
   const reason = indefensibleReason(questions);
   if (reason) return { dropped: { ...base, reason } };
-  return { kept: { ...h, questions } };
+  // 先核验全部回答（多出来的题答不上来同样剔除），通过后只展示前 3 组，符合 PRD「2-3 个追问」
+  return { kept: { ...h, questions: questions.slice(0, 3) } };
 }
 
 /**
