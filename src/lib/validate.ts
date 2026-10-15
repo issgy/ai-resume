@@ -56,9 +56,19 @@ export function checkHighlights(raw: Highlight[], experiences: Experience[]) {
   return { kept, dropped };
 }
 
+export const INSUFFICIENT_PREFIX = "（素材不足";
+
+/**
+ * 参考回答是否不可信：带 insufficient 标记，或回答以 INSUFFICIENT_PREFIX 开头
+ * （e24ceda 之前存下的数据没有 insufficient 字段，只能靠前缀识别）
+ */
+export function isInsufficient(qa: QA): boolean {
+  return qa.insufficient === true || (qa.a ?? "").trim().startsWith(INSUFFICIENT_PREFIX);
+}
+
 /** 任一追问答不上来（参考回答不可信）的亮点不能写进简历；返回剔除原因，全部可信时返回 null */
 export function indefensibleReason(questions: QA[]): string | null {
-  const bad = questions.filter((qa) => qa.insufficient);
+  const bad = questions.filter(isInsufficient);
   if (bad.length === 0) return null;
   return bad.map((qa) => `面试追问「${qa.q}」无法基于你的原始描述给出可信回答`).join("；");
 }
@@ -75,15 +85,13 @@ export function dropIndefensible(resume: ResumeResult): ResumeResult {
   return { ...resume, highlights, dropped };
 }
 
-export const INSUFFICIENT_PREFIX = "（素材不足";
-
 /**
  * 校验面试参考回答：回答里的数字和英文专有名词必须出现在所引事实（含原话）中。
  * 回答未单独引用事实时，以所属亮点引用的事实为依据。不通过的回答替换为补充提示，不展示编造内容。
  */
 export function checkAnswer(qa: QA, expFacts: Fact[], highlightFacts: Fact[]): QA {
   const a = (qa.a ?? "").trim();
-  if (a.startsWith(INSUFFICIENT_PREFIX)) return { ...qa, a, insufficient: true };
+  if (isInsufficient({ ...qa, a })) return { ...qa, a, insufficient: true };
 
   const cited = expFacts.filter((f) => (qa.factIds ?? []).includes(f.id));
   const facts = cited.length > 0 ? cited : highlightFacts;
