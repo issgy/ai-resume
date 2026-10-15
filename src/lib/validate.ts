@@ -16,8 +16,9 @@ export function sourceInUserText(source: string, userText: string) {
 }
 
 /**
- * 校验亮点：必须引用本段经历下存在的事实；亮点里的每个数字都要出现在所引事实（含原话）中；
+ * 校验亮点（规则部分）：必须引用本段经历下存在的事实；亮点里的每个数字和英文专有名词都要出现在所引事实（含原话）中；
  * 每个面试追问都要能基于原始描述给出可信回答。不通过的亮点被剔除并记录原因。
+ * 技能、职责、效果等中文说法由 /api/verify 的大模型核验把关。
  */
 export function checkHighlights(raw: Highlight[], experiences: Experience[]) {
   const kept: Highlight[] = [];
@@ -45,15 +46,106 @@ export function checkHighlights(raw: Highlight[], experiences: Experience[]) {
       dropped.push({ text: h.text, reason: `数字 ${unknown.join("、")} 在你的原始描述中找不到`, experienceId: exp.id, factIds });
       continue;
     }
+    // 英文技术名、工具名、缩写同样不能凭空出现（如事实没提 SQL，亮点就不能写 SQL）
+    const evidenceTerms = new Set((evidence.match(TERM_RE) ?? []).map((t) => t.toLowerCase()));
+    const unknownTerms = [...new Set((h.text.match(TERM_RE) ?? []).filter((t) => !evidenceTerms.has(t.toLowerCase())))];
+    if (unknownTerms.length > 0) {
+      dropped.push({ text: h.text, reason: `「${unknownTerms.join("、")}」在你的原始描述中找不到`, experienceId: exp.id, factIds });
+      continue;
+    }
     const questions = (h.questions ?? []).map((qa) => checkAnswer(qa, exp.facts, facts));
     const reason = indefensibleReason(questions);
     if (reason) {
       dropped.push({ text: h.text, reason, experienceId: exp.id, factIds });
       continue;
     }
-    kept.push({ ...h, experienceId: exp.id, factIds, questions });
+    const sources = Object.fromEntries(facts.map((f) => [f.id, f.source]));
+    kept.push({ ...h, experienceId: exp.id, factIds, questions, sources });
   }
   return { kept, dropped };
+}
+
+export const VERIFY_FAILED = "内容核验服务出错或超时，未能确认这条亮点有据可查，请稍后重新生成";
+export const VERIFY_MISSING = "内容核验没有返回这条亮点的结论，请重新生成";
+
+/**
+ * 大模型返回的 results 只经过 JSON 解析，没有任何结构保证，这里严格校验后才采信：
+ * results 不是数组，或任一条目不是对象、index 不是 [0, count) 内的整数、index 重复，
+ * 说明结论与亮点的对应关系不可信，返回 null，整批按核验失败处理。
+ */
+function indexVerifyResults(results: unknown, count: number): Map<number, unknown> | null {
+  if (!Array.isArray(results)) return null;
+  const byIndex = new Map<number, unknown>();
+  for (const r of results) {
+    if (typeof r !== "object" || r === null || Array.isArray(r)) return null;
+    const { index, unsupported } = r as { index?: unknown; unsupported?: unknown };
+    if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= count) return null;
+    if (byIndex.has(index)) return null;
+    byIndex.set(index, unsupported);
+  }
+  return byIndex;
+}
+
+/** unsupported 必须存在且是由非空字符串组成的数组（全部有依据时为空数组），否则返回 null 表示结论无效 */
+function parseUnsupported(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  if (!value.every((s) => typeof s === "string" && s.trim().length > 0)) return null;
+  return (value as string[]).map((s) => s.trim());
+}
+
+/**
+ * 按大模型核验结论筛选亮点（items 与 results 用下标对应）：
+ * 核验明确指出无依据说法时剔除并写出这些说法；某条没有拿到结论或结论格式不对时按核验失败剔除，
+ * 整体结构不可信时整批剔除，不放行未核验的内容。
+ */
+export function applyVerification(items: Highlight[], results: unknown) {
+  const byIndex = indexVerifyResults(results, items.length);
+  if (!byIndex) return { kept: [] as Highlight[], dropped: failVerification(items) };
+
+  const kept: Highlight[] = [];
+  const dropped: DroppedHighlight[] = [];
+  items.forEach((h, i) => {
+    const base = { text: h.text, experienceId: h.experienceId, factIds: h.factIds };
+    if (!byIndex.has(i)) {
+      dropped.push({ ...base, reason: VERIFY_MISSING });
+      return;
+    }
+    const unsupported = parseUnsupported(byIndex.get(i));
+    if (!unsupported) {
+      dropped.push({ ...base, reason: VERIFY_FAILED });
+      return;
+    }
+    if (unsupported.length > 0) {
+      dropped.push({ ...base, reason: `${[...new Set(unsupported)].map((s) => `「${s}」`).join("")}在你的原始描述中找不到依据` });
+      return;
+    }
+    kept.push(h);
+  });
+  return { kept, dropped };
+}
+
+/** 核验服务整体出错时，这批亮点全部剔除 */
+export function failVerification(items: Highlight[]): DroppedHighlight[] {
+  return items.map((h) => ({ text: h.text, reason: VERIFY_FAILED, experienceId: h.experienceId, factIds: h.factIds }));
+}
+
+/**
+ * 生成简历后履历库又被修改：亮点所引事实被删除或原话已变，核验结论就不再成立，读取时移入 dropped。
+ * 只处理经过核验流程的简历；旧简历没有原话快照，本身不允许导出。
+ */
+export function dropStale(resume: ResumeResult, experiences: Experience[]): ResumeResult {
+  if (!resume.provenanceChecked) return resume;
+  const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, f] as const)));
+  const highlights: Highlight[] = [];
+  const dropped: DroppedHighlight[] = [...resume.dropped];
+  for (const h of resume.highlights) {
+    const stale =
+      h.factIds.length === 0 || h.factIds.some((id) => factById.get(id)?.source !== h.sources?.[id] || h.sources?.[id] === undefined);
+    if (stale) {
+      dropped.push({ text: h.text, reason: "所引用的履历事实在生成简历后被修改或删除，请重新生成", experienceId: h.experienceId, factIds: h.factIds });
+    } else highlights.push(h);
+  }
+  return { ...resume, highlights, dropped };
 }
 
 export const INSUFFICIENT_PREFIX = "（素材不足";

@@ -82,7 +82,7 @@ export default function CollectPage() {
 
   function save() {
     if (!draft) return;
-    const facts = draft.facts.map((f) => ({ id: uid(), text: f.text, source: f.source }));
+    const facts = draft.facts.map((f) => ({ id: uid(), text: f.text, source: f.source, origin: "chat" as const }));
     setExperiences((prev) => {
       const same = prev.find((e) => e.company && e.company === draft.company && e.title === draft.title);
       if (same && confirm(`履历库里已有「${same.company} · ${same.title}」，是否合并到这段经历？（取消则新建）`)) {

@@ -4,7 +4,7 @@ import { useRef } from "react";
 import Link from "next/link";
 import { Button, Card, PageHeader } from "@/components/ui";
 import { KEYS, exportAll, importAll, uid, useStored } from "@/lib/storage";
-import type { Experience } from "@/lib/types";
+import type { Experience, Fact } from "@/lib/types";
 
 export default function VaultPage() {
   const [experiences, setExperiences, loaded] = useStored<Experience[]>(KEYS.experiences, []);
@@ -12,6 +12,18 @@ export default function VaultPage() {
 
   function update(id: string, patch: Partial<Experience>) {
     setExperiences((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
+  }
+
+  /** 手动修改的内容就是用户自己写的：改后的文字记为新来源，第一次修改时保留修改前的原话 */
+  function editFact(exp: Experience, f: Fact, text: string) {
+    const edited: Fact = {
+      ...f,
+      text,
+      source: text,
+      origin: "edited",
+      originalSource: f.origin === "edited" ? f.originalSource : f.source,
+    };
+    update(exp.id, { facts: exp.facts.map((x) => (x.id === f.id ? edited : x)) });
   }
 
   function download() {
@@ -89,11 +101,23 @@ export default function VaultPage() {
                     className="field resize-none"
                     rows={2}
                     value={f.text}
-                    onChange={(e) =>
-                      update(exp.id, { facts: exp.facts.map((x) => (x.id === f.id ? { ...x, text: e.target.value } : x)) })
-                    }
+                    onChange={(e) => editFact(exp, f, e.target.value)}
                   />
-                  <div className="px-1 text-xs text-muted">原话：「{f.source}」</div>
+                  <div className="px-1 text-xs text-muted">
+                    {f.origin === "edited" ? (
+                      <>
+                        <span className="mr-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-amber-800">手动修改</span>
+                        以上文字即为来源{f.originalSource ? `；修改前原话：「${f.originalSource}」` : ""}
+                      </>
+                    ) : f.origin === "manual" ? (
+                      <>
+                        <span className="mr-1 rounded-full bg-accent-soft px-1.5 py-0.5 text-accent">手动补充</span>
+                        以上文字即为来源
+                      </>
+                    ) : (
+                      <>原话：「{f.source}」</>
+                    )}
+                  </div>
                 </div>
                 <button
                   className="h-8 w-8 shrink-0 rounded-full text-muted transition hover:bg-red-50 hover:text-red-600"
@@ -109,7 +133,7 @@ export default function VaultPage() {
             variant="ghost"
             onClick={() => {
               const text = prompt("补充一条事实（请如实填写）");
-              if (text?.trim()) update(exp.id, { facts: [...exp.facts, { id: uid(), text: text.trim(), source: text.trim() }] });
+              if (text?.trim()) update(exp.id, { facts: [...exp.facts, { id: uid(), text: text.trim(), source: text.trim(), origin: "manual" }] });
             }}
           >
             + 手动补充一条
