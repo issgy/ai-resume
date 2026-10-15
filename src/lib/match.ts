@@ -77,6 +77,9 @@ function strings(value: unknown): string[] | null {
   return (value as string[]).map((s) => s.trim()).filter(Boolean);
 }
 
+/** 模型写的年限类缺失点（「1 年 4 个月」「经验年限不足」等），服务端能算出年限时以服务端为准 */
+const YEARS_MISSING_RE = /年限|个月|[\d一二两三四五六七八九十半]\s*年/;
+
 export const COMPOUND_MISSING = "该条包含多项要求，未能逐项确认";
 
 /**
@@ -105,7 +108,7 @@ export function checkRequirements(
     const gap: Requirement = { text, type, factIds: [], coverage: "none", missing: [] };
 
     const rawIds = strings(r.factIds);
-    const missing = r.missing === undefined ? [] : strings(r.missing);
+    const modelMissing = r.missing === undefined ? [] : strings(r.missing);
     const coverage: Coverage | null = COVERAGES.includes(r.coverage as Coverage)
       ? (r.coverage as Coverage)
       : r.coverage === undefined && opts.legacy && rawIds
@@ -113,17 +116,22 @@ export function checkRequirements(
           ? "full"
           : "none"
         : null;
-    if (!textOk || !rawIds || !missing || !coverage) return gap;
+    if (!textOk || !rawIds || !modelMissing || !coverage) return gap;
 
     const factIds = [...new Set(rawIds.filter((id) => factById.has(id)))];
-    if (factIds.length === 0 || coverage === "none") return { ...gap, missing };
+    if (factIds.length === 0 || coverage === "none") return { ...gap, missing: modelMissing };
+
+    const cited = factIds.map((id) => factById.get(id)!);
+    const years = requiredYears(text);
+    const have = years === null ? null : experienceYears([...new Map(cited.map(({ exp }) => [exp.id, exp])).values()], opts.now);
+    // 年限能由服务端按起止时间算出时，丢弃模型自己算的年限类缺失点，只保留下面服务端给出的那一条
+    const missing = have === null ? modelMissing : modelMissing.filter((s) => !YEARS_MISSING_RE.test(s));
 
     let result: Coverage = coverage;
     const extra: string[] = [];
     // 模型自己列出了缺失点却又标 full，结论自相矛盾
     if (missing.length > 0) result = cap(result, "partial");
 
-    const cited = factIds.map((id) => factById.get(id)!);
     const evidence = cited.map(({ fact }) => `${fact.text} ${fact.source}`).join(" ");
     const evidenceTerms = new Set((evidence.match(TERM_RE) ?? []).map((t) => t.toLowerCase()));
     const unknownTerms = [...new Set((text.match(TERM_RE) ?? []).filter((t) => !evidenceTerms.has(t.toLowerCase())))];
@@ -137,10 +145,7 @@ export function checkRequirements(
       extra.push(COMPOUND_MISSING);
     }
 
-    const years = requiredYears(text);
     if (years !== null) {
-      const exps = [...new Map(cited.map(({ exp }) => [exp.id, exp])).values()];
-      const have = experienceYears(exps, opts.now);
       if (have === null) {
         result = cap(result, "partial");
         extra.push(`经历起止时间不完整，无法核实 ${years} 年年限`);
