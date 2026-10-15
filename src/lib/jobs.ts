@@ -44,7 +44,26 @@ function update(patch: Partial<JobsState>) {
   for (const l of listeners) l();
 }
 
+/**
+ * 整页刷新/关闭时浏览器会中止进行中的请求，旧页面的 catch/finally 可能在卸载前执行。
+ * 卸载期间不能清除进行中标记，否则新页面发现不了「被中断」。
+ */
+let unloading = false;
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => {
+    unloading = true;
+  });
+  window.addEventListener("beforeunload", () => {
+    unloading = true;
+  });
+  // 从 bfcache 恢复时页面并没有卸载
+  window.addEventListener("pageshow", () => {
+    unloading = false;
+  });
+}
+
 function markPending(kind: JobKind, pending: boolean) {
+  if (!pending && unloading) return;
   try {
     if (pending) sessionStorage.setItem(PENDING_KEY(kind), String(Date.now()));
     else sessionStorage.removeItem(PENDING_KEY(kind));
