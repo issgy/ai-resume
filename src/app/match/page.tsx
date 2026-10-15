@@ -38,7 +38,7 @@ export default function MatchPage() {
     setError("");
     setLoading("resume");
     try {
-      const data = await postJson<Pick<ResumeResult, "highlights" | "dropped">>("/api/resume", { ...match, experiences });
+      const data = await postJson<Pick<ResumeResult, "highlights" | "dropped" | "failedExperienceIds">>("/api/resume", { ...match, experiences });
       // 规则校验通过的亮点再做一次大模型内容核验；核验请求整体失败时这批亮点全部剔除，不放行未核验内容
       let verified: Pick<ResumeResult, "highlights" | "dropped"> = { highlights: [], dropped: [] };
       if (data.highlights.length > 0) {
@@ -53,6 +53,8 @@ export default function MatchPage() {
         jd: match.jd,
         highlights: verified.highlights,
         dropped: [...data.dropped, ...verified.dropped],
+        failedExperienceIds: data.failedExperienceIds ?? [],
+        // 只有上面核验通过的 highlights 会被导出；简历页不会把未核验的履历事实写进正文
         provenanceChecked: true,
       });
       router.push("/resume");

@@ -68,6 +68,11 @@ export type ResumeResult = {
   jd: string;
   highlights: Highlight[];
   dropped: DroppedHighlight[];
-  /** 经过内容核验流程生成（GAPS#2 之后）；旧简历没有该字段，只能查看、不能导出 */
+  /**
+   * 经过内容核验流程生成（GAPS#2 之后）：可导出的条目只有 highlights 中逐条核验过的亮点，
+   * 简历页不会把未核验的履历事实写进正文。旧简历没有该字段，只能查看、不能导出
+   */
   provenanceChecked?: boolean;
+  /** 撰写请求失败或没返回亮点的经历 id；旧数据没有该字段 */
+  failedExperienceIds?: string[];
 };

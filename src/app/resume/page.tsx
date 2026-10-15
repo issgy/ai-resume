@@ -64,8 +64,7 @@ export default function ResumePage() {
     const origin = factById.get(id)?.origin;
     return origin === "edited" ? "你在履历库手动修改为" : origin === "manual" ? "你手动补充" : "你说过";
   };
-  // 履历库里的每段经历都要出现在简历中；没有定向亮点的经历直接列出原始事实，
-  // 但被剔除亮点引用过的事实不列出，避免答不上来的内容换个形式回到简历里
+  const failedIds = new Set(resume.failedExperienceIds ?? []);
   const sections = experiences
     .filter((e) => e.facts.length > 0)
     .map((e) => {
@@ -74,10 +73,16 @@ export default function ResumePage() {
       return {
         exp: e,
         items: resume.highlights.filter((h) => h.experienceId === e.id),
+        failed: failedIds.has(e.id),
         hasDropped: dropped.length > 0,
         fallbackFacts: e.facts.filter((f) => !droppedFactIds.has(f.id)),
       };
     });
+  // 宁缺勿滥：简历正文（屏幕、打印、PDF、长图）只放核验通过的亮点；
+  // 没有亮点的经历不写入简历，其履历事实只在正文之外列出供用户查看
+  const verifiedSections = sections.filter((s) => s.items.length > 0);
+  const unverifiedSections = sections.filter((s) => s.items.length === 0);
+  const failedSections = unverifiedSections.filter((s) => s.failed);
 
   return (
     <div className="space-y-6">
@@ -97,12 +102,12 @@ export default function ResumePage() {
           ))}
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="accent" onClick={exportPdf} disabled={exporting || !exportable}>
+          <Button variant="accent" onClick={exportPdf} disabled={exporting || !exportable || verifiedSections.length === 0}>
             {exporting ? "正在生成 PDF…" : "下载 PDF"}
           </Button>
           {/* 打印只在桌面端提供；用外层控制显隐，避免和按钮自身的 inline-flex 冲突 */}
           <span className="hidden sm:inline">
-            <Button variant="ghost" onClick={() => window.print()} disabled={!exportable}>打印</Button>
+            <Button variant="ghost" onClick={() => window.print()} disabled={!exportable || verifiedSections.length === 0}>打印</Button>
           </span>
           <Link href="/match"><Button variant="ghost">{exportable ? "换一个 JD" : "重新生成"}</Button></Link>
         </div>
@@ -115,6 +120,12 @@ export default function ResumePage() {
         {exportable && verifyFailed && (
           <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
             内容核验服务出错或超时，未能确认的亮点已剔除（见页面底部）。请稍后<Link href="/match" className="underline">重新生成</Link>。
+          </p>
+        )}
+        {failedSections.length > 0 && (
+          <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            以下经历的亮点生成失败，未写入简历：{failedSections.map((s) => `${s.exp.company} · ${s.exp.title}`).join("、")}。
+            可能是模型请求出错或超时，请<Link href="/match" className="underline">重新生成</Link>。
           </p>
         )}
         <ErrorText>{exportError}</ErrorText>
@@ -143,27 +154,17 @@ export default function ResumePage() {
           </p>
         </header>
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">工作经历</h2>
-        {sections.map(({ exp, items, hasDropped, fallbackFacts }) => (
+        {verifiedSections.length === 0 && (
+          <p className="no-print rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            暂无通过核验的亮点可写入简历，请<Link href="/match" className="underline">重新生成</Link>。
+          </p>
+        )}
+        {verifiedSections.map(({ exp, items }) => (
           <section key={exp.id} className="mb-4 break-inside-avoid">
             <div className="flex justify-between text-sm font-semibold">
               <span>{exp.company} · {exp.title}</span>
               <span className="font-normal text-slate-500">{[exp.start, exp.end].filter(Boolean).join(" – ")}</span>
             </div>
-            {items.length === 0 && (
-              <>
-                <p className="no-print mt-1 rounded-lg bg-amber-50 px-2 py-1 text-xs text-amber-800">
-                  {hasDropped
-                    ? `这段经历的亮点都未通过校验（原因见页面底部）${fallbackFacts.length ? "，下面列出未被剔除亮点引用的履历事实" : "，暂无可写入的内容"}。`
-                    : "这段经历没有生成定向亮点（可能是生成简历后才录入的），下面直接列出履历库中的事实。"}
-                  <Link href="/match" className="underline">重新生成</Link>可获得针对 JD 的亮点。
-                </p>
-                <ul className="mt-1 space-y-1">
-                  {fallbackFacts.map((f) => (
-                    <li key={f.id} className="text-sm before:mr-1 before:content-['•']">{f.text}</li>
-                  ))}
-                </ul>
-              </>
-            )}
             <ul className="mt-1 space-y-1">
               {items.map((h, i) => (
                 <li key={i} className="text-sm">
@@ -196,6 +197,34 @@ export default function ResumePage() {
           </section>
         ))}
       </article>
+
+      {/* 正文之外：没有核验通过亮点的经历，只供查看，不进入简历 */}
+      {unverifiedSections.map(({ exp, failed, hasDropped, fallbackFacts }) => (
+        <section key={exp.id} className="no-print space-y-2 rounded-3xl border border-amber-200 bg-amber-50/70 p-5 text-sm">
+          <div className="flex justify-between font-semibold text-amber-900">
+            <span>{exp.company} · {exp.title}</span>
+            <span className="font-normal text-amber-700">{[exp.start, exp.end].filter(Boolean).join(" – ")}</span>
+          </div>
+          <p className="text-xs text-amber-800">
+            {failed
+              ? "这段经历的亮点生成失败（模型请求出错、超时或没有返回内容）。"
+              : hasDropped
+                ? "这段经历的亮点都未通过校验（原因见页面底部）。"
+                : "这段经历没有生成定向亮点（可能是生成简历后才录入的）。"}
+            <Link href="/match" className="underline">重新生成</Link>可获得针对 JD 的亮点。
+          </p>
+          {fallbackFacts.length > 0 && (
+            <>
+              <p className="text-xs font-semibold text-amber-900">以下内容未经核验，未写入简历：</p>
+              <ul className="space-y-1">
+                {fallbackFacts.map((f) => (
+                  <li key={f.id} className="text-slate-700 before:mr-1 before:content-['•']">{f.text}</li>
+                ))}
+              </ul>
+            </>
+          )}
+        </section>
+      ))}
 
       {resume.dropped.length > 0 && (
         <div className="no-print rounded-3xl border border-amber-200 bg-amber-50/70 p-5 text-sm">
