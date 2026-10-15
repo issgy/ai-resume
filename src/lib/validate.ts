@@ -18,7 +18,8 @@ export function sourceInUserText(source: string, userText: string) {
 /**
  * 校验亮点（规则部分）：必须引用本段经历下存在的事实；亮点里的每个数字和英文专有名词都要出现在所引事实（含原话）中；
  * 每个面试追问都要能基于原始描述给出可信回答。不通过的亮点被剔除并记录原因。
- * 技能、职责、效果等中文说法由 /api/verify 的大模型核验把关。
+ * 技能、职责、效果等中文说法由 /api/verify 的大模型核验把关；/api/resume 只写亮点、不带问答，
+ * 问答在核验通过后由 /api/qa 生成并经 applyQA 用同一套 checkAnswer / indefensibleReason 校验。
  */
 export function checkHighlights(raw: Highlight[], experiences: Experience[]) {
   const kept: Highlight[] = [];
@@ -127,6 +128,41 @@ export function applyVerification(items: Highlight[], results: unknown) {
 /** 核验服务整体出错时，这批亮点全部剔除 */
 export function failVerification(items: Highlight[]): DroppedHighlight[] {
   return items.map((h) => ({ text: h.text, reason: VERIFY_FAILED, experienceId: h.experienceId, factIds: h.factIds }));
+}
+
+export const QA_FAILED = "面试追问生成服务出错或超时，未能确认这条亮点经得起追问，请稍后重新生成";
+export const QA_MISSING = "没有拿到这条亮点的面试追问与参考回答，请重新生成";
+
+/** 问答服务整体出错时，这批亮点全部剔除（与核验失败一致，fail-closed） */
+export function failQA(items: Highlight[]): DroppedHighlight[] {
+  return items.map((h) => ({ text: h.text, reason: QA_FAILED, experienceId: h.experienceId, factIds: h.factIds }));
+}
+
+/**
+ * 给已核验的亮点挂上面试问答：raw 是模型返回的 questions，只经过 JSON 解析，没有结构保证。
+ * 只采信 q、a 都是非空字符串的条目；一条有效问答都没有时按「没拿到问答」剔除。
+ * 每个参考回答按 checkAnswer 校验，任一回答不可信的亮点按 indefensibleReason 剔除（GAPS#1）。
+ */
+export function applyQA(h: Highlight, raw: unknown, experiences: Experience[]): { kept?: Highlight; dropped?: DroppedHighlight } {
+  const base = { text: h.text, experienceId: h.experienceId, factIds: h.factIds };
+  const exp = experiences.find((e) => e.id === h.experienceId);
+  if (!exp) return { dropped: { text: h.text, reason: "未关联到任何经历", factIds: h.factIds } };
+  const facts = exp.facts.filter((f) => h.factIds.includes(f.id));
+  const items: unknown[] = Array.isArray(raw) ? raw : [];
+  const parsed: QA[] = items.flatMap((item) => {
+    if (typeof item !== "object" || item === null) return [];
+    const { q, a, factIds } = item as { q?: unknown; a?: unknown; factIds?: unknown };
+    if (typeof q !== "string" || !q.trim() || typeof a !== "string" || !a.trim()) return [];
+    const ids = Array.isArray(factIds) ? factIds.filter((id): id is string => typeof id === "string") : [];
+    return [{ q: q.trim(), a, factIds: ids }];
+  });
+  // 有任何格式异常的条目（可能正是答不上来的那题）或不足 2 组问答（PRD 要求 2-3 个追问）时一律剔除，不挑着放行
+  if (parsed.length < 2 || parsed.length !== items.length) return { dropped: { ...base, reason: QA_MISSING } };
+  const questions = parsed.map((qa) => checkAnswer(qa, exp.facts, facts));
+  const reason = indefensibleReason(questions);
+  if (reason) return { dropped: { ...base, reason } };
+  // 先核验全部回答（多出来的题答不上来同样剔除），通过后只展示前 3 组，符合 PRD「2-3 个追问」
+  return { kept: { ...h, questions: questions.slice(0, 3) } };
 }
 
 /**

@@ -6,7 +6,7 @@ import { KEYS, read, uid, writeStored } from "@/lib/storage";
 import { experienceKey } from "@/lib/importText";
 import type { ImportResponse } from "@/lib/importText";
 import type { Experience, Profile, Requirement, ResumeResult } from "@/lib/types";
-import { failVerification, norm } from "@/lib/validate";
+import { failQA, failVerification, norm } from "@/lib/validate";
 
 /**
  * 「粘贴简历导入」「分析匹配」「生成定向简历」的后台任务。
@@ -38,7 +38,7 @@ export type JobsState = {
   /** 进行中的阶段，null 表示空闲；同类任务同一时间只有一个 */
   import: "import" | null;
   match: "match" | null;
-  resume: "resume" | "verify" | null;
+  resume: "resume" | "verify" | "qa" | null;
   /** 最近一次匹配/生成失败原因，显示在匹配页；开始新任务时清空 */
   error: string;
   /** 最近一次导入失败原因，显示在录入页 */
@@ -239,10 +239,20 @@ export async function runResume(jd: string, requirements: Requirement[], experie
         verified = { highlights: [], dropped: failVerification(data.highlights) };
       }
     }
+    // 只给核验通过的亮点生成面试问答；问答请求整体失败时这批亮点同样全部剔除，回答不可信的亮点由 /api/qa 剔除
+    let answered: Pick<ResumeResult, "highlights" | "dropped"> = { highlights: [], dropped: [] };
+    if (verified.highlights.length > 0) {
+      update({ resume: "qa" });
+      try {
+        answered = await postJson<Pick<ResumeResult, "highlights" | "dropped">>("/api/qa", { jd, highlights: verified.highlights, experiences });
+      } catch {
+        answered = { highlights: [], dropped: failQA(verified.highlights) };
+      }
+    }
     const resume: ResumeResult = {
       jd,
-      highlights: verified.highlights,
-      dropped: [...data.dropped, ...verified.dropped],
+      highlights: answered.highlights,
+      dropped: [...data.dropped, ...verified.dropped, ...answered.dropped],
       failedExperienceIds: data.failedExperienceIds ?? [],
       // 只有上面核验通过的 highlights 会被导出；简历页不会把未核验的履历事实写进正文
       provenanceChecked: true,
