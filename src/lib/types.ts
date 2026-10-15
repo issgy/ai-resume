@@ -46,7 +46,13 @@ export type Highlight = {
   questions: QA[];
 };
 
-export type DroppedHighlight = { text: string; reason: string };
+export type DroppedHighlight = {
+  text: string;
+  reason: string;
+  /** 所属经历与所引事实；旧数据没有这两个字段 */
+  experienceId?: string;
+  factIds?: string[];
+};
 
 export type MatchResult = { jd: string; requirements: Requirement[] };
 

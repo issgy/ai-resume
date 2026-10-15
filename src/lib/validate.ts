@@ -1,4 +1,4 @@
-import type { Experience, Fact, Highlight, DroppedHighlight, QA } from "./types";
+import type { Experience, Fact, Highlight, DroppedHighlight, QA, ResumeResult } from "./types";
 
 const NUM_RE = /\d+(?:\.\d+)?/g;
 /** 英文技术名、产品名、缩写（React、Redis、GMV 等），用来发现参考回答里凭空出现的专有名词 */
@@ -16,8 +16,8 @@ export function sourceInUserText(source: string, userText: string) {
 }
 
 /**
- * 校验亮点：必须引用本段经历下存在的事实；亮点里的每个数字都要出现在所引事实（含原话）中。
- * 不通过的亮点被剔除并记录原因。
+ * 校验亮点：必须引用本段经历下存在的事实；亮点里的每个数字都要出现在所引事实（含原话）中；
+ * 每个面试追问都要能基于原始描述给出可信回答。不通过的亮点被剔除并记录原因。
  */
 export function checkHighlights(raw: Highlight[], experiences: Experience[]) {
   const kept: Highlight[] = [];
@@ -34,18 +34,24 @@ export function checkHighlights(raw: Highlight[], experiences: Experience[]) {
     }
     const facts = exp.facts.filter((f) => (h.factIds ?? []).includes(f.id));
     if (facts.length === 0) {
-      dropped.push({ text: h.text, reason: "没有引用任何事实，无法溯源" });
+      dropped.push({ text: h.text, reason: "没有引用任何事实，无法溯源", experienceId: exp.id, factIds: [] });
       continue;
     }
     const evidence = facts.map((f) => `${f.text} ${f.source}`).join(" ");
     const evidenceNums = new Set(evidence.match(NUM_RE) ?? []);
     const unknown = (h.text.match(NUM_RE) ?? []).filter((n) => !evidenceNums.has(n));
+    const factIds = facts.map((f) => f.id);
     if (unknown.length > 0) {
-      dropped.push({ text: h.text, reason: `数字 ${unknown.join("、")} 在你的原始描述中找不到` });
+      dropped.push({ text: h.text, reason: `数字 ${unknown.join("、")} 在你的原始描述中找不到`, experienceId: exp.id, factIds });
       continue;
     }
     const questions = (h.questions ?? []).map((qa) => checkAnswer(qa, exp.facts, facts));
-    kept.push({ ...h, experienceId: exp.id, factIds: facts.map((f) => f.id), questions });
+    const reason = indefensibleReason(questions);
+    if (reason) {
+      dropped.push({ text: h.text, reason, experienceId: exp.id, factIds });
+      continue;
+    }
+    kept.push({ ...h, experienceId: exp.id, factIds, questions });
   }
   return { kept, dropped };
 }
@@ -53,12 +59,39 @@ export function checkHighlights(raw: Highlight[], experiences: Experience[]) {
 export const INSUFFICIENT_PREFIX = "（素材不足";
 
 /**
+ * 参考回答是否不可信：带 insufficient 标记，或回答以 INSUFFICIENT_PREFIX 开头
+ * （e24ceda 之前存下的数据没有 insufficient 字段，只能靠前缀识别）
+ */
+export function isInsufficient(qa: QA): boolean {
+  return qa.insufficient === true || (qa.a ?? "").trim().startsWith(INSUFFICIENT_PREFIX);
+}
+
+/** 任一追问答不上来（参考回答不可信）的亮点不能写进简历；返回剔除原因，全部可信时返回 null */
+export function indefensibleReason(questions: QA[]): string | null {
+  const bad = questions.filter(isInsufficient);
+  if (bad.length === 0) return null;
+  return bad.map((qa) => `面试追问「${qa.q}」无法基于你的原始描述给出可信回答`).join("；");
+}
+
+/** 旧版本存下的简历里，回答不可信的亮点仍在 highlights 中；读取时按同一规则移入 dropped */
+export function dropIndefensible(resume: ResumeResult): ResumeResult {
+  const highlights: Highlight[] = [];
+  const dropped: DroppedHighlight[] = [...(resume.dropped ?? [])];
+  for (const h of resume.highlights ?? []) {
+    const reason = indefensibleReason(h.questions ?? []);
+    if (reason) dropped.push({ text: h.text, reason, experienceId: h.experienceId, factIds: h.factIds });
+    else highlights.push(h);
+  }
+  return { ...resume, highlights, dropped };
+}
+
+/**
  * 校验面试参考回答：回答里的数字和英文专有名词必须出现在所引事实（含原话）中。
  * 回答未单独引用事实时，以所属亮点引用的事实为依据。不通过的回答替换为补充提示，不展示编造内容。
  */
 export function checkAnswer(qa: QA, expFacts: Fact[], highlightFacts: Fact[]): QA {
   const a = (qa.a ?? "").trim();
-  if (a.startsWith(INSUFFICIENT_PREFIX)) return { ...qa, a, insufficient: true };
+  if (isInsufficient({ ...qa, a })) return { ...qa, a, insufficient: true };
 
   const cited = expFacts.filter((f) => (qa.factIds ?? []).includes(f.id));
   const facts = cited.length > 0 ? cited : highlightFacts;

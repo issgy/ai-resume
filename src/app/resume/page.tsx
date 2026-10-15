@@ -6,6 +6,7 @@ import { Button, Card, ErrorText, PageHeader } from "@/components/ui";
 import { isInAppBrowser, renderResume, saveFile, toPdf } from "@/lib/exportPdf";
 import { KEYS, useStored } from "@/lib/storage";
 import type { Experience, Profile, ResumeResult } from "@/lib/types";
+import { dropIndefensible } from "@/lib/validate";
 
 const EMPTY_PROFILE: Profile = { name: "", phone: "", email: "", school: "", birthday: "" };
 const FIELDS: [keyof Profile, string][] = [
@@ -19,7 +20,8 @@ const FIELDS: [keyof Profile, string][] = [
 export default function ResumePage() {
   const [experiences, , loaded] = useStored<Experience[]>(KEYS.experiences, []);
   const [profile, setProfile] = useStored<Profile>(KEYS.profile, EMPTY_PROFILE);
-  const [resume] = useStored<ResumeResult | null>(KEYS.resume, null);
+  const [stored] = useStored<ResumeResult | null>(KEYS.resume, null);
+  const resume = stored && dropIndefensible(stored);
   const articleRef = useRef<HTMLElement>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
@@ -55,10 +57,20 @@ export default function ResumePage() {
   }
 
   const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, f] as const)));
-  // 履历库里的每段经历都要出现在简历中；没有定向亮点的经历直接列出原始事实
+  // 履历库里的每段经历都要出现在简历中；没有定向亮点的经历直接列出原始事实，
+  // 但被剔除亮点引用过的事实不列出，避免答不上来的内容换个形式回到简历里
   const sections = experiences
     .filter((e) => e.facts.length > 0)
-    .map((e) => ({ exp: e, items: resume.highlights.filter((h) => h.experienceId === e.id) }));
+    .map((e) => {
+      const dropped = resume.dropped.filter((d) => d.experienceId === e.id);
+      const droppedFactIds = new Set(dropped.flatMap((d) => d.factIds ?? []));
+      return {
+        exp: e,
+        items: resume.highlights.filter((h) => h.experienceId === e.id),
+        hasDropped: dropped.length > 0,
+        fallbackFacts: e.facts.filter((f) => !droppedFactIds.has(f.id)),
+      };
+    });
 
   return (
     <div className="space-y-6">
@@ -113,7 +125,7 @@ export default function ResumePage() {
           </p>
         </header>
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">工作经历</h2>
-        {sections.map(({ exp, items }) => (
+        {sections.map(({ exp, items, hasDropped, fallbackFacts }) => (
           <section key={exp.id} className="mb-4 break-inside-avoid">
             <div className="flex justify-between text-sm font-semibold">
               <span>{exp.company} · {exp.title}</span>
@@ -122,11 +134,13 @@ export default function ResumePage() {
             {items.length === 0 && (
               <>
                 <p className="no-print mt-1 rounded-lg bg-amber-50 px-2 py-1 text-xs text-amber-800">
-                  这段经历没有生成定向亮点（可能是生成简历后才录入的），下面直接列出履历库中的事实。
+                  {hasDropped
+                    ? `这段经历的亮点都未通过校验（原因见页面底部）${fallbackFacts.length ? "，下面列出未被剔除亮点引用的履历事实" : "，暂无可写入的内容"}。`
+                    : "这段经历没有生成定向亮点（可能是生成简历后才录入的），下面直接列出履历库中的事实。"}
                   <Link href="/match" className="underline">重新生成</Link>可获得针对 JD 的亮点。
                 </p>
                 <ul className="mt-1 space-y-1">
-                  {exp.facts.map((f) => (
+                  {fallbackFacts.map((f) => (
                     <li key={f.id} className="text-sm before:mr-1 before:content-['•']">{f.text}</li>
                   ))}
                 </ul>
@@ -152,7 +166,7 @@ export default function ResumePage() {
                         {h.questions.map((q, j) => (
                           <div key={j} className="mt-1">
                             <div>Q：{q.q}</div>
-                            <div className={q.insufficient ? "text-amber-700" : "text-slate-500"}>A：{q.a}</div>
+                            <div className="text-slate-500">A：{q.a}</div>
                           </div>
                         ))}
                       </div>
