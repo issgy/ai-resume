@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { callLLMJson } from "@/lib/llm";
 import { IMPORTER } from "@/lib/prompts";
-import { norm, sourceInUserText } from "@/lib/validate";
-import { BULLET_RE, IMPORT_MAX, IMPORT_MIN, experienceKey, splitResume } from "@/lib/importText";
+import { norm } from "@/lib/validate";
+import { BULLET_RE, IMPORT_MAX, IMPORT_MIN, experienceKey, literalSpan, splitResume } from "@/lib/importText";
 import type { ImportResponse, ImportedExperience, ResumeChunk } from "@/lib/importText";
 import type { Profile } from "@/lib/types";
 
@@ -19,8 +19,8 @@ const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 const PLACEHOLDER = /^(公司名称|岗位名称|项目名称|项目所属单位|角色|姓名|电话|邮箱|学校|出生日期|无|暂无|未知|N\/?A|null)$/i;
 const field = (v: unknown, original: string) => {
   const s = str(v);
-  // 公司、岗位必须出现在原文里，避免模型补出原文没有的单位或头衔
-  return s && !PLACEHOLDER.test(s) && sourceInUserText(s, original) ? s : "";
+  // 公司、岗位、时间必须出现在原文里（保存原文的原样写法），避免模型补出原文没有的单位或头衔
+  return s && !PLACEHOLDER.test(s) ? literalSpan(s, original) : "";
 };
 
 export async function POST(req: Request) {
@@ -47,7 +47,8 @@ export async function POST(req: Request) {
   for (const p of parsed) {
     for (const k of PROFILE_KEYS) {
       const v = str(p.profile?.[k]);
-      if (v && !PLACEHOLDER.test(v) && !profile[k] && sourceInUserText(v, text)) profile[k] = v;
+      const literal = v && !PLACEHOLDER.test(v) && !profile[k] ? literalSpan(v, text) : "";
+      if (literal) profile[k] = literal;
     }
   }
 
@@ -71,10 +72,10 @@ export async function POST(req: Request) {
         // 去掉行首的项目符号/序号，否则同一句话带不带「- 」会被当成两条事实（去掉后仍是原文的连续片段）
         // 模型偶尔把事实直接写成字符串或放在 text 字段里；无论哪种写法，都必须能在原文中逐字找到
         const raw = typeof f === "string" ? f : str(f?.source) || str(f?.text);
-        const source = raw.trim().replace(BULLET_RE, "");
-        // 导入的事实一律保存原文：模型只负责从原文中挑出片段并拆分，不保存任何改写，从根本上避免改变原意
-        const fact = { text: source, source };
-        if (fact.text && sourceInUserText(fact.source, text)) exp.facts.push(fact);
+        // 导入的事实一律保存原文：模型只负责从原文中挑出片段并拆分，不保存任何改写，从根本上避免改变原意。
+        // 模型复制时可能丢了标点，所以在原文里找到对应位置，保存原文那一段的原样文字
+        const source = literalSpan(raw.trim().replace(BULLET_RE, ""), text);
+        if (source) exp.facts.push({ text: source, source });
         else rejected++;
       }
       // 看不出属于哪段经历的零散内容（如被切开的尾部、技能清单）合并成一段「未归类」，由用户在履历库里整理

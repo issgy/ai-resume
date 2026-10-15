@@ -1,4 +1,5 @@
 import type { Profile } from "./types";
+import { norm } from "./validate";
 
 /** 粘贴导入的字数限制 */
 export const IMPORT_MIN = 50;
@@ -45,7 +46,7 @@ export const BULLET_RE = /^\s*(?:[-–—*](?=\s)|[•·●○■□▪]|\d{1,2}
 const SECTION_RE = /^[\s#*【\[]*([\u4e00-\u9fa5A-Za-z ]{2,12})[\]】:：\s]*$/;
 /** 只认常见的板块名，避免把单独一行的学校名、公司名、人名当成板块标题 */
 const SECTION_NAME_RE =
-  /^((教育|学习)(经历|背景|情况)?|学历|(工作|实习|实践|社会实践|校园|科研)(经历|经验)|(主要)?项目(经历|经验)|(专业|个人)?技能(特长|清单)?|技术栈|(个人|基本)(信息|资料)|自我评价|个人(简介|总结|优势)|荣誉(奖项)?|获奖(情况|经历)?|(资格)?证书|培训经历|语言能力|兴趣爱好|求职意向|其他|education|(work |professional )?experience|projects?|skills?)$/i;
+  /^((教育|学习)(经历|背景|情况)?|学历|(工作|实习|实践|社会实践|校园|科研)(经历|经验)?|(主要)?项目(经历|经验)?|(专业|个人)?技能(特长|清单)?|技术栈|(个人|基本)(信息|资料)|自我评价|个人(简介|总结|优势)|荣誉(奖项)?|获奖(情况|经历)?|(资格)?证书|培训经历|语言能力|兴趣爱好|求职意向|其他|education|(work |professional )?experience|projects?|skills?)$/i;
 const EDU_SECTION_RE = /^((教育|学习)(经历|背景|情况)?|学历|education)$/i;
 
 /**
@@ -130,22 +131,39 @@ export function splitResume(text: string): ResumeChunk[] {
     if (t) chunks.push({ text: t, expected: Math.max(headers, continuation ? 1 : 0) });
     buf = [];
   };
+  /** 标题部分：到经历标题行为止的前几行（可能是「公司 / 岗位 / 日期」分行） */
+  const headerOf = (block: Line[]) => {
+    const hIdx = block.findIndex((l) => l.h);
+    return hIdx >= 0 && hIdx <= 2 ? block.slice(0, hIdx + 1).map((l) => l.s).join("\n") : "";
+  };
+  /** 当前所在经历的标题；同一段经历被空行分成几段、又被拆到不同块时，续块都带上它 */
+  let current = "";
+  /** 开新块时补上当前经历的标题（只为提供上下文，不重复计入应解析的经历段数） */
+  const carryHeader = () => {
+    if (current && current.length < CHUNK_TARGET) buf.push({ s: current, h: false, c: true });
+  };
   for (const block of blocks) {
+    if (block.some((l) => l.h)) current = headerOf(block);
+    // 进入「技能」「教育经历」等新板块后，后面的内容不再属于上一段经历
+    else if (isSectionLabel(block[0].s)) current = "";
     if (size(block) <= CHUNK_TARGET) {
-      if (buf.length && (block.some((l) => l.h) || size(buf) + size(block) > CHUNK_TARGET)) emit();
+      const startsExperience = block.some((l) => l.h);
+      // 新的经历或新的板块（技能、教育经历等）都另起一块，避免和上一段经历混在一起被归到它名下
+      const startsSection = isSectionLabel(block[0].s);
+      if (buf.length && (startsExperience || startsSection || size(buf) + size(block) > CHUNK_TARGET)) {
+        emit();
+        if (!startsExperience && !startsSection) carryHeader();
+      }
       buf.push(...block);
       continue;
     }
     emit();
-    // 标题部分：到经历标题行为止的前几行（可能是「公司 / 岗位 / 日期」分行），续块都带上
-    const hIdx = block.findIndex((l) => l.h);
-    const header = hIdx >= 0 && hIdx <= 2 ? block.slice(0, hIdx + 1).map((l) => l.s).join("\n") : "";
+    const header = current;
     const pieces = block.flatMap((l) => splitLine(l.s).map((s, j) => ({ s, h: l.h && j === 0 })));
     for (const piece of pieces) {
       if (buf.length && size(buf) + piece.s.length + 1 > CHUNK_TARGET) {
         emit();
-        // 复制过来的标题行只为提供上下文，不重复计入应解析的经历段数
-        if (header && header.length < CHUNK_TARGET) buf.push({ s: header, h: false, c: true });
+        if (header) carryHeader();
       }
       buf.push(piece);
     }
@@ -153,3 +171,28 @@ export function splitResume(text: string): ResumeChunk[] {
   emit();
   return chunks;
 }
+
+/**
+ * 在原文中找到与 s 对应的连续片段（比较时忽略空白和标点，和 sourceInUserText 一致），返回原文里那一段的原样文字；
+ * 找不到时返回空串。保证入库的永远是用户原文，而不是模型去掉标点后的版本。
+ */
+export function literalSpan(s: string, original: string): string {
+  if (!s) return "";
+  if (original.includes(s)) return s;
+  const target = norm(s);
+  if (!target) return "";
+  // 原文逐字符做同样的规范化，并记录每个保留字符在原文中的位置
+  let normalized = "";
+  const pos: number[] = [];
+  for (let i = 0; i < original.length; i++) {
+    const ch = norm(original[i]);
+    if (ch) {
+      normalized += ch;
+      pos.push(i);
+    }
+  }
+  const at = normalized.indexOf(target);
+  if (at < 0) return "";
+  return original.slice(pos[at], pos[at + target.length - 1] + 1).trim();
+}
+
