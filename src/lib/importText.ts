@@ -97,7 +97,7 @@ export function splitResume(text: string): ResumeChunk[] {
   const total = isHeader.filter(Boolean).length;
   if (text.length <= SPLIT_OVER && total <= 1) return [{ text, expected: total }];
 
-  /** h：经历标题行；c：硬切后的续块里复制的标题行（续块至少应解析出一段经历） */
+  /** h：经历标题行；c：续块里复制的标题行（续块至少应解析出一段经历） */
   type Line = { s: string; h: boolean; c?: boolean };
   const blocks: Line[][] = [];
   let cur: Line[] = [];
@@ -110,9 +110,11 @@ export function splitResume(text: string): ResumeChunk[] {
     // 板块标题前没有空行时也要另起一段，否则「技能」「教育经历」会混进上一段经历
     if (isSectionLabel(s) && cur.length) flush();
     if (isHeader[i] && cur.length) {
-      // 「公司 / 岗位 / 日期」分行写时，日期前紧挨着的短行（公司、岗位）属于这段经历，一起带走
+      // 「公司 / 岗位 / 日期」分行写时，日期前紧挨着的短行（公司、岗位）属于这段经历，一起带走。
+      // 只在日期单独成行时才带：日期行本身已写了公司/岗位时，前面的短行是上一段经历的事实，不能挪走
+      const dateOnly = s.replace(/[\d.\s|｜/,，、:：()（）\-–—~～年月日至今现在]/g, "").length === 0;
       const carry: Line[] = [];
-      while (carry.length < 2 && cur.length > 0) {
+      while (dateOnly && carry.length < 2 && cur.length > 0) {
         const prev = cur[cur.length - 1];
         if (prev.h || prev.s.trim().length > 30 || BULLET_RE.test(prev.s) || isSectionLabel(prev.s)) break;
         carry.unshift(cur.pop()!);
