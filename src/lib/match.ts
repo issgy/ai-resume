@@ -77,8 +77,24 @@ function strings(value: unknown): string[] | null {
   return (value as string[]).map((s) => s.trim()).filter(Boolean);
 }
 
-/** 模型写的年限类缺失点（「1 年 4 个月」「经验年限不足」等），服务端能算出年限时以服务端为准 */
-const YEARS_MISSING_RE = /年限|个月|[\d一二两三四五六七八九十半]\s*年/;
+/** 时长表达：1-2 位数字或中文数字 + 年/年半/个月（不匹配「2024 年」这类 4 位年份） */
+const DURATION_RE =
+  /(?<!\d)(?:\d{1,2}(?:\.\d+)?|[一二两三四五六七八九十半]{1,3})(?:[-~～至到](?:\d{1,2}|[一二两三四五六七八九十]{1,2}))?(?:年半|年|个月)(?!\d)/g;
+/** 纯年限条目里允许出现的修饰词；剩下任何其它字符都视为另有缺口描述 */
+const YEARS_FILLER_RE =
+  /工作年限|经验年限|从业年限|年限|工作经验|相关经验|经验|工作|从业|以上|不足|不够|未满|未达到|未达|达不到|少于|低于|不到|仅有|只有|仅|约|合计|所引经历|实际|要求|需要|缺少|欠缺|差|的|[+＋（）()。.:：]/g;
+
+/**
+ * 是否是「纯年限」缺失点（如「1 年 4 个月」「经验年限不足」「只有 2 年经验」），服务端能算出年限时以服务端为准、可以丢弃。
+ * 宁可多留不可误删：含并列连接词（，、；且和及等）或除年限外的其它内容（「缺少 2024 年后的项目经历」）一律返回 false。
+ */
+export function isPureYearsMissing(s: string): boolean {
+  const t = s.replace(/\s+/g, "").replace(/[及或]以上/g, "以上");
+  if (/[，,；;、和及与且并/]/.test(t)) return false;
+  const rest = t.replace(DURATION_RE, "");
+  if (rest === t && !/年限/.test(t)) return false;
+  return rest.replace(YEARS_FILLER_RE, "") === "";
+}
 
 export const COMPOUND_MISSING = "该条包含多项要求，未能逐项确认";
 
@@ -125,7 +141,7 @@ export function checkRequirements(
     const years = requiredYears(text);
     const have = years === null ? null : experienceYears([...new Map(cited.map(({ exp }) => [exp.id, exp])).values()], opts.now);
     // 年限能由服务端按起止时间算出时，丢弃模型自己算的年限类缺失点，只保留下面服务端给出的那一条
-    const missing = have === null ? modelMissing : modelMissing.filter((s) => !YEARS_MISSING_RE.test(s));
+    const missing = have === null ? modelMissing : modelMissing.filter((s) => !isPureYearsMissing(s));
 
     let result: Coverage = coverage;
     const extra: string[] = [];
