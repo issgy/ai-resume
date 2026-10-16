@@ -1,6 +1,6 @@
 import type { Coverage, Education, Experience, Requirement } from "./types";
 import { checkEducation, isEducationRequirement } from "./education";
-import { TERM_RE } from "./validate";
+import { TERM_RE, norm } from "./validate";
 
 const COVERAGES: Coverage[] = ["full", "partial", "none"];
 const RANK: Record<Coverage, number> = { none: 0, partial: 1, full: 2 };
@@ -105,9 +105,25 @@ export function isPureYearsMissing(s: string, requirement = ""): boolean {
   return rest.replace(YEARS_FILLER_RE, "") === "";
 }
 
-/** 一条要求最多引用的事实条数；超过视为没有找到直接依据 */
-export const MAX_CITED = 5;
-export const BROAD_MISSING = "没有找到直接对应的经历（所引依据过于宽泛）";
+/** 一条要求最多引用的事实条数（提示词要求 1-3 条）；超过视为没有找到直接依据 */
+export const MAX_CITED = 3;
+export const BROAD_MISSING = "没有找到直接对应的经历";
+
+/** 要求里的修饰词：去掉后剩下的才是要核对的关键词 */
+const REQ_FILLER_RE =
+  /熟悉|熟练(使用|掌握)?|掌握|精通|了解|理解|常用|常见|主流|相关|具备|具有|拥有|良好的?|较强的?|优秀的?|扎实的?|丰富的?|一定的?|基本|基础|原理|经验|能力|技能|知识|背景|者优先|优先|以上|及|等|的|有|能/g;
+
+/** 「熟悉常用机器学习/NLP/图像分析等算法原理」→ ["机器学习", "nlp", "图像分析", "算法"] */
+export function requirementKeywords(text: string): string[] {
+  return [
+    ...new Set(
+      text
+        .split(/[、，,／/;；和与或及\s()（）]+/)
+        .map((w) => norm(w.replace(REQ_FILLER_RE, "")).toLowerCase())
+        .filter((w) => w.length >= 2),
+    ),
+  ];
+}
 
 export const COMPOUND_MISSING = "该条包含多项要求，未能逐项确认";
 
@@ -164,6 +180,24 @@ export function checkRequirements(
     const factIds = [...new Set(rawIds.filter((id) => factById.has(id)))];
     if (factIds.length === 0 || coverage === "none") return { ...gap, missing: modelMissing };
 
+    // 一条要求引用了一大片事实，说明模型没有挑选、只是把能看到的都列上了：只保留和要求有关键词重合的事实，
+    // 按命中的关键词数排序取前 MAX_CITED 条；一条都不剩说明没有直接依据，按缺口处理
+    if (factIds.length > MAX_CITED) {
+      const keys = requirementKeywords(text);
+      const hits = (id: string) => {
+        const src = norm(factById.get(id)!.fact.source).toLowerCase();
+        return keys.filter((k) => src.includes(k)).length;
+      };
+      const kept = factIds
+        .map((id, i) => ({ id, i, n: hits(id) }))
+        .filter((x) => x.n > 0)
+        .sort((a, b) => b.n - a.n || a.i - b.i)
+        .slice(0, MAX_CITED)
+        .sort((a, b) => a.i - b.i)
+        .map((x) => x.id);
+      if (kept.length === 0) return { ...gap, missing: [BROAD_MISSING] };
+      factIds.splice(0, factIds.length, ...kept);
+    }
     const cited = factIds.map((id) => factById.get(id)!);
     const years = requiredYears(text);
     const have = years === null ? null : experienceYears([...new Map(cited.map(({ exp }) => [exp.id, exp])).values()], opts.now);
@@ -175,11 +209,6 @@ export function checkRequirements(
     // 模型自己列出了缺失点却又标 full，结论自相矛盾
     if (missing.length > 0) result = cap(result, "partial");
 
-    // 一条要求引用了一大片事实，说明模型没有找到直接对应的经历、只是把能看到的都列上了
-    if (factIds.length > MAX_CITED) {
-      result = cap(result, "partial");
-      extra.push(BROAD_MISSING);
-    }
 
     // 只认用户原话 source；text 是 AI 整理的表述，可能已含幻觉（与 /api/verify 一致）
     const evidence = cited.map(({ fact }) => fact.source).join(" ");
