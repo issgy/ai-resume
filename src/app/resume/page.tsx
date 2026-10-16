@@ -6,7 +6,7 @@ import { Button, Card, ErrorText, PageHeader } from "@/components/ui";
 import { isInAppBrowser, renderResume, saveFile, toPdf } from "@/lib/exportPdf";
 import { KEYS, useStored } from "@/lib/storage";
 import type { Experience, Profile, ResumeResult } from "@/lib/types";
-import { QA_FAILED, QA_MISSING, VERIFY_FAILED, VERIFY_MISSING, dropIndefensible, dropStale } from "@/lib/validate";
+import { QA_FAILED, QA_MISSING, VERIFY_FAILED, VERIFY_MISSING, dropStale, isInsufficient, needsInput } from "@/lib/validate";
 
 const EMPTY_PROFILE: Profile = { name: "", phone: "", email: "", school: "", birthday: "" };
 const FIELDS: [keyof Profile, string][] = [
@@ -21,7 +21,7 @@ export default function ResumePage() {
   const [experiences, , loaded] = useStored<Experience[]>(KEYS.experiences, []);
   const [profile, setProfile] = useStored<Profile>(KEYS.profile, EMPTY_PROFILE);
   const [stored] = useStored<ResumeResult | null>(KEYS.resume, null);
-  const resume = stored && dropStale(dropIndefensible(stored), experiences);
+  const resume = stored && dropStale(stored, experiences);
   // 内容核验上线前生成的简历没有经过核验，只能查看，不能导出
   const exportable = !!resume?.provenanceChecked;
   const articleRef = useRef<HTMLElement>(null);
@@ -178,6 +178,11 @@ export default function ResumePage() {
                     <summary className="cursor-pointer list-none before:mr-1 before:content-['•'] print:cursor-auto">
                       {h.text}
                       <span className="no-print ml-1.5 rounded-full bg-accent-soft px-2 py-0.5 text-[11px] text-accent group-open:hidden">来源与追问</span>
+                      {needsInput(h) > 0 && (
+                        <span className="no-print ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800 group-open:hidden">
+                          {needsInput(h)} 个追问需补充
+                        </span>
+                      )}
                     </summary>
                     <div className="no-print my-2 space-y-3 rounded-xl border border-line bg-paper p-4 text-xs">
                       <div>
@@ -191,7 +196,15 @@ export default function ResumePage() {
                         {h.questions.map((q, j) => (
                           <div key={j} className="mt-1">
                             <div>Q：{q.q}</div>
-                            <div className="text-slate-500">A：{q.a}</div>
+                            {isInsufficient(q) ? (
+                              <div className="text-amber-800">
+                                <span className="mr-1 rounded-full bg-amber-100 px-1.5 py-0.5">需要你补充</span>
+                                你的原始描述里没有这道题的答案，AI 不代答。面试前请结合真实经历准备；也可以
+                                <Link href="/vault" className="underline underline-offset-2">到履历库补充细节</Link>，下次生成会用上。
+                              </div>
+                            ) : (
+                              <div className="text-slate-500">A：{q.a}</div>
+                            )}
                           </div>
                         ))}
                       </div>
