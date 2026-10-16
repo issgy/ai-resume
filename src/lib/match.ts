@@ -114,6 +114,9 @@ export function isGenericYearsRequirement(text: string): boolean {
   return text.replace(YEARS_RE, "").replace(GENERIC_YEARS_FILLER_RE, "") === "";
 }
 
+/** 实习、兼职、校园任职 */
+const NON_FULLTIME_RE = /实习|兼职|校园|学生会|社团|助教|助研|intern|part[\s-]?time/i;
+
 /** 时长的中文写法：不足 1 年按月，否则保留一位小数 */
 function durationLabel(years: number): string {
   const months = Math.round(years * 12);
@@ -128,16 +131,22 @@ export function checkWorkYears(
   years: number,
   experiences: Experience[],
   now = new Date(),
+  text = "",
 ): { coverage: Coverage; missing: string[]; experienceIds: string[] } {
-  const jobs = experiences.filter((e) => e.title.trim());
-  if (jobs.length === 0) return { coverage: "none", missing: ["履历库里没有带岗位的任职经历"], experienceIds: [] };
+  // 能看出是实习、兼职、校园任职的不计入工作年限
+  const jobs = experiences.filter((e) => e.title.trim() && !NON_FULLTIME_RE.test(`${e.company} ${e.title}`));
+  if (jobs.length === 0) return { coverage: "none", missing: ["履历库里没有正式任职经历（实习、兼职、项目经历不计入）"], experienceIds: [] };
   const have = experienceYears(jobs, now);
   const ids = jobs.map((e) => e.id);
   if (have === null) {
     return { coverage: "partial", missing: [`经历起止时间不完整，无法核实 ${years} 年工作年限`], experienceIds: ids };
   }
-  if (have >= years) return { coverage: "full", missing: [], experienceIds: ids };
-  return { coverage: "none", missing: [`需要 ${years} 年以上，任职经历合计约 ${durationLabel(have)}`], experienceIds: ids };
+  if (have < years) return { coverage: "none", missing: [`需要 ${years} 年以上，任职经历合计约 ${durationLabel(have)}`], experienceIds: ids };
+  // 够年限，但程序看不出每段是不是全职（岗位名里不一定写「实习」）：要求明确写「全职」时最多部分覆盖
+  if (/全职/.test(text)) {
+    return { coverage: "partial", missing: ["无法确认以上经历均为全职，请自行核对"], experienceIds: ids };
+  }
+  return { coverage: "full", missing: [], experienceIds: ids };
 }
 
 /** 一条要求最多引用的事实条数（提示词要求 1-3 条）；超过视为没有找到直接依据 */
@@ -152,7 +161,7 @@ export function relatedMissing(keys: string[]): string {
 
 /** 要求里的修饰词：去掉后剩下的才是要核对的关键词 */
 const REQ_FILLER_RE =
-  /熟悉|熟练(使用|掌握)?|掌握|精通|了解|理解|常用|常见|主流|相关|具备|具有|拥有|良好的?|较强的?|优秀的?|扎实的?|丰富的?|一定的?|基本|基础|原理|经验|能力|技能|知识|背景|者优先|优先|以上|及|等|的|有|能/g;
+  /熟悉|熟练(使用|掌握)?|掌握|精通|了解|理解|常用|常见|主流|相关|具备|具有|拥有|良好的?|较强的?|优秀的?|扎实的?|丰富的?|一定的?|基本|基础|原理|经验|能力|技能|知识|背景|技术|框架|工具|方法|者优先|优先|以上|及|等|的|有|能/g;
 
 /** 「熟悉常用机器学习/NLP/图像分析等算法原理」→ ["机器学习", "nlp", "图像分析", "算法"] */
 export function requirementKeywords(text: string): string[] {
@@ -209,7 +218,7 @@ export function checkRequirements(
 
     // 不限领域的工作年限（「1 年以上工作经验」）：和具体哪条事实无关，由程序按任职经历的起止时间计算
     if (textOk && isGenericYearsRequirement(text)) {
-      return { text, type, factIds: [], ...checkWorkYears(requiredYears(text)!, experiences, opts.now) };
+      return { text, type, factIds: [], ...checkWorkYears(requiredYears(text)!, experiences, opts.now, text) };
     }
 
     const rawIds = strings(r.factIds);
@@ -251,6 +260,12 @@ export function checkRequirements(
         kept.push(...factIds.slice(0, MAX_CITED));
       }
       factIds.splice(0, factIds.length, ...kept);
+      // 关键词命中只用来挑候选依据：留下的事实没有覆盖要求里的全部关键词时，最多部分覆盖并写明缺的词
+      if (!relatedOnly) {
+        const evidenceText = norm(kept.map((id) => factById.get(id)!.fact.source).join(" ")).toLowerCase();
+        const lacking = keys.filter((k) => !evidenceText.includes(k.toLowerCase()));
+        if (lacking.length > 0) relatedOnly = lacking;
+      }
     }
     const cited = factIds.map((id) => factById.get(id)!);
     const years = requiredYears(text);

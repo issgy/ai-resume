@@ -33,25 +33,34 @@ export function isEducationRequirement(text: string): boolean {
 /** 院校层次类要求：程序无法核实，只能请用户自己确认 */
 const SCHOOL_TIER_RE = /985|211|双一流|名校|重点(大学|院校)|qs|top\s?\d+|海外|留学|一本|统招/i;
 
-/** 「计算机、软件工程等相关专业」→ ["计算机", "软件工程"]；没有具体专业名时返回 [] */
-function majorKeywords(text: string): string[] {
-  const m = text.match(/(.{0,30}?)(?:等)?(?:相关)?专业/);
-  if (!m) return [];
-  return m[1]
+/**
+ * 「计算机、软件工程等相关专业」→ { keys: ["计算机", "软件工程"], all: false }（列举的是可选范围，满足一个即可）；
+ * 「计算机及数学双专业」这类用「及/和/与/并」连接的 → all: true（每个都要满足）。没有具体专业名时 keys 为 []
+ */
+function majorKeywords(text: string): { keys: string[]; all: boolean } {
+  const m = text.match(/(.{0,30}?)(?:等)?(?:相关)?(?:双)?专业/);
+  if (!m) return { keys: [], all: false };
+  const seg = m[1]
     .replace(/^.*?(?:学历|学位|以上|毕业)[，,、\s]*/, "")
-    .replace(/(本科|硕士|博士|研究生|大专|专科|统招|全日制)(及以上|以上)?(学历|学位)?/g, "")
-    .split(/[、，,/／或及和与\s]+/)
+    .replace(/(本科|硕士|博士|研究生|大专|专科|统招|全日制)(及以上|以上)?(学历|学位)?/g, "");
+  const keys = seg
+    .split(/[、，,/／或及和与并\s]+/)
     .map((w) => w.replace(/(类|方向|领域|学科|相关|等)$/g, "").trim())
     .filter((w) => w.length >= 2 && !/^(相关|理工|理工科|以上|及以上)$/.test(w));
+  return { keys, all: /[及和与并]/.test(seg) && !/[、，,/／或]/.test(seg) };
 }
 
-/** 结束时间在今天之后的视为在读；只能解析到年份时按该年 7 月毕业估算；解析不了时按已毕业处理 */
-function inProgress(end: string, now: Date): boolean {
-  if (/至今|在读|present|now/i.test(end)) return true;
-  const m = end.match(/(\d{4})(?:\D{1,3}(\d{1,2}))?/);
+/**
+ * 能否确认已经毕业（宁缺勿滥）：写了「在读」、毕业时间为空或解析不了，都不算确认毕业；
+ * 写到月份的按月比较，只写年份的要早于今年才算。
+ */
+function graduated(e: Education, now: Date): boolean {
+  if (/在读|至今|present|now/i.test(`${e.degree} ${e.end} ${e.source}`)) return false;
+  const m = e.end.match(/((?:19|20)\d{2})(?:\D{1,3}(\d{1,2}))?/);
   if (!m) return false;
-  const month = m[2] ? Number(m[2]) : 7;
-  return Number(m[1]) * 12 + month - 1 > now.getFullYear() * 12 + now.getMonth();
+  const nowMonth = now.getFullYear() * 12 + now.getMonth();
+  if (m[2]) return Number(m[1]) * 12 + Number(m[2]) - 1 <= nowMonth;
+  return Number(m[1]) < now.getFullYear();
 }
 
 function eduLevel(e: Education): number {
@@ -87,28 +96,48 @@ export function checkEducation(text: string, education: Education[], now = new D
         educationIds: [],
       };
     }
-    const done = meets.filter((e) => !inProgress(e.end, now));
+    const done = meets.filter((e) => graduated(e, now));
     if (done.length > 0) {
       evidence = done;
     } else {
       evidence = meets;
       coverage = "partial";
-      missing.push(`${LEVEL_NAME[need]}及以上学历尚未毕业（${meets.map((e) => `${e.degree || LEVEL_NAME[eduLevel(e)]}${e.end ? ` 预计 ${e.end} 毕业` : "在读"}`).join("、")}）`);
+      missing.push(
+        `${LEVEL_NAME[need]}及以上学历尚未毕业或毕业时间未确认（${meets
+          .map((e) => `${e.degree || LEVEL_NAME[eduLevel(e)]}${e.end ? ` 毕业时间 ${e.end}` : " 未填毕业时间"}`)
+          .join("、")}）`,
+      );
     }
   }
 
   if (/专业/.test(text)) {
-    const keys = majorKeywords(text);
+    const { keys, all } = majorKeywords(text);
+    // 只认专业字段；专业字段为空时才退回原文行（原文行可能还写着学院、辅修等，不作首选）
+    const majorText = (e: Education) => norm(e.major.trim() ? e.major : e.source);
+    const has = (e: Education, k: string) => majorText(e).includes(norm(k));
     if (keys.length === 0) {
       coverage = "partial";
       missing.push("专业要求未写明具体专业，请自行核对");
+    } else if (all) {
+      const lacking = keys.filter((k) => !evidence.some((e) => has(e, k)));
+      if (lacking.length > 0) {
+        coverage = "partial";
+        missing.push(`专业：${lacking.join("、")}`);
+      }
+      const hit = evidence.filter((e) => keys.some((k) => has(e, k)));
+      if (hit.length > 0) evidence = hit;
     } else {
-      const hit = evidence.filter((e) => keys.some((k) => norm(`${e.major} ${e.source}`).includes(norm(k))));
+      const hit = evidence.filter((e) => keys.some((k) => has(e, k)));
       if (hit.length > 0) evidence = hit;
       else {
         coverage = "partial";
         missing.push(`专业：${keys.join("、")}`);
       }
+    }
+    // 专业字段为空、只能靠原文行判断时，最多部分覆盖
+    if (coverage === "full" && evidence.every((e) => !e.major.trim())) {
+      coverage = "partial";
+      missing.push("教育背景没有单独填写专业，请自行核对");
     }
   }
 
@@ -154,7 +183,7 @@ export function educationLabel(e: Education): string {
   return [e.school, e.degree, e.major, time].filter(Boolean).join(" · ");
 }
 
-/** 判断同一段教育背景：学校 + 学历 */
-export function educationKey(e: { school: string; degree: string }): string {
-  return `${norm(e.school)}|${norm(e.degree)}`;
+/** 判断同一段教育背景：学校 + 学历 + 专业 + 入学时间都相同才算同一段 */
+export function educationKey(e: { school: string; degree: string; major: string; start: string }): string {
+  return `${norm(e.school)}|${norm(e.degree)}|${norm(e.major)}|${norm(e.start)}`;
 }
