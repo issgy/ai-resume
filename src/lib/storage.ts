@@ -28,13 +28,16 @@ const STORED_EVENT = "air:stored";
 type StoredDetail = { key: string; value: unknown };
 
 /** 写入 localStorage 并通知已挂载的 useStored；不依赖组件是否挂载，后台任务也可直接调用 */
-export function writeStored<T>(key: string, value: T) {
+export function writeStored<T>(key: string, value: T): boolean {
+  let ok = true;
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch {
-    // 存储满或被禁用时忽略
+    // 存储满或被禁用：返回 false，由需要确认持久化的调用方（如导入）报错
+    ok = false;
   }
   window.dispatchEvent(new CustomEvent<StoredDetail>(STORED_EVENT, { detail: { key, value } }));
+  return ok;
 }
 
 /** localStorage 持久化的 state；首帧返回 fallback，挂载后再读取，避免 SSR 水合不一致 */
