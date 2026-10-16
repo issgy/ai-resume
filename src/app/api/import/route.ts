@@ -71,7 +71,7 @@ export async function POST(req: Request) {
       end: field(r.end, text),
       source: (line ?? school).trim(),
     };
-    const key = `${norm(item.school)}|${norm(item.degree)}|${norm(item.start)}`;
+    const key = `${norm(item.school)}|${norm(item.degree)}|${norm(item.major)}|${norm(item.start)}`;
     if (eduSeen.has(key)) continue;
     eduSeen.add(key);
     education.push(item);
@@ -121,7 +121,8 @@ export async function POST(req: Request) {
         break;
       }
     }
-    for (let i = range[1] + 1; i <= end; i++) {
+    // 模型给的范围里也可能夹着它漏掉的经历标题，所以从第二行起整段检查
+    for (let i = range[0] + 1; i <= Math.max(range[1], end); i++) {
       if (looksLikeHeader(lines[i - 1])) {
         orphans.push([i + 1, end]);
         return [range[0], i - 1];
@@ -129,6 +130,7 @@ export async function POST(req: Request) {
     }
     return [range[0], Math.max(range[1], end)];
   };
+  // 注意：end 可能因为板块标题比模型给的结束行还早，这时以板块标题为准
 
   let rejected = 0;
   const covered = new Set<number>();

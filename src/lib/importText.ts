@@ -22,10 +22,13 @@ export type ImportResponse = {
   unassigned: number;
 };
 
-/** 是否同一段经历：公司 + 岗位相同，且开始时间相同（任一方没写开始时间时按公司 + 岗位判断） */
+/**
+ * 是否同一段经历：公司 + 岗位相同，且开始时间相同；两边都没写开始时间时也算同一段（重复导入同一份简历不会多出经历）。
+ * 只有一边有开始时间时无法确认是同一段任职，保留为独立经历。
+ */
 export function sameExperience(a: { company: string; title: string; start: string }, b: { company: string; title: string; start: string }) {
   if (experienceKey(a) !== experienceKey(b)) return false;
-  return !a.start.trim() || !b.start.trim() || norm(a.start) === norm(b.start);
+  return norm(a.start) === norm(b.start);
 }
 
 /** 同一段经历的判定键：company + title，忽略空白和大小写；两者都为空时返回空串（未归类） */

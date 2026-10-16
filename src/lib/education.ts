@@ -47,7 +47,8 @@ function majorKeywords(text: string): { keys: string[]; all: boolean } {
     .split(/[、，,/／或及和与并\s]+/)
     .map((w) => w.replace(/(类|方向|领域|学科|相关|等)$/g, "").trim())
     .filter((w) => w.length >= 2 && !/^(相关|理工|理工科|以上|及以上)$/.test(w));
-  return { keys, all: /[及和与并]/.test(seg) && !/[、，,/／或]/.test(seg) };
+  // 出现「及/和/与/并」时无法确定是「都要」还是「任选」（「计算机、数学及统计学专业」），按都要处理
+  return { keys, all: /[及和与并]/.test(seg) };
 }
 
 /**
@@ -122,7 +123,7 @@ export function checkEducation(text: string, education: Education[], now = new D
       const lacking = keys.filter((k) => !evidence.some((e) => has(e, k)));
       if (lacking.length > 0) {
         coverage = "partial";
-        missing.push(`专业：${lacking.join("、")}`);
+        missing.push(`专业：${lacking.join("、")}（要求写的是「及/和」，无法确认是否需要全部满足，请自行核对）`);
       }
       const hit = evidence.filter((e) => keys.some((k) => has(e, k)));
       if (hit.length > 0) evidence = hit;
