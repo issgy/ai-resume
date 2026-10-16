@@ -32,9 +32,9 @@ export function experienceKey(e: { company: string; title: string }) {
 export const BULLET_RE =
   /^\s*(?:[-–—*](?=\s)|[•·●○■□▪]|\d{1,2}[.．、)）](?![\d.．])|\d{1,2}[.．](?=(?:19|20)\d{2}\s*年)|[（(]\d{1,2}[)）])\s*/;
 
-/** 常见板块标题（整行只有它），不作为事实 */
+/** 常见板块标题（整行只有它，可带「一、」「2.」「（三）」这类序号），不作为事实 */
 const SECTION_LABEL_RE =
-  /^[\s#*【\[]*((教育|学习)(经历|背景)?|学历|(工作|实习|实践|校园|科研)(经历|经验)?|(主要)?项目(经历|经验)?|(专业|个人)?技能(特长|清单)?|技术栈|(个人|基本)(信息|资料|简介|总结|优势|评价|爱好)|自我(评价|介绍)|求职(意向|目标)|(外语|语言)(能力|水平)?|兴趣(爱好)?|爱好|特长|荣誉(奖项|称号)?|获奖(情况|经历)?|奖项|(资格|职业)?证书(资质)?|资质证书|培训(经历)?|在校经历|学生工作|社团(经历)?|(论文|专利|科研成果|学术成果)(发表)?|发表论文|其他(信息)?|附加信息|education|(work |professional |internship )?experience|projects?|skills?|summary|profile|objective|languages?|interests|hobbies|awards?|honors?|certifications?|publications?)[\]】:：\s]*$/i;
+  /^[\s#*【\[]*(?:(?:[一二三四五六七八九十]{1,3}|\d{1,2})\s*[、.．)）]\s*|[（(](?:[一二三四五六七八九十]{1,3}|\d{1,2})[)）]\s*)?[【\[]?((教育|学习)(经历|背景)?|学历|(工作|实习|实践|校园|科研)(经历|经验)?|(主要)?项目(经历|经验)?|(专业|个人)?技能(特长|清单)?|技术栈|(个人|基本)(信息|资料|简介|总结|优势|评价|爱好)|自我(评价|介绍)|求职(意向|目标)|(外语|语言)(能力|水平)?|兴趣(爱好)?|爱好|特长|荣誉(奖项|称号)?|获奖(情况|经历)?|奖项|(资格|职业)?证书(资质)?|资质证书|培训(经历)?|在校经历|学生工作|社团(经历)?|(论文|专利|科研成果|学术成果)(发表)?|发表论文|其他(信息)?|附加信息|education|(work |professional |internship )?experience|projects?|skills?|summary|profile|objective|languages?|interests|hobbies|awards?|honors?|certifications?|publications?)[\]】:：\s]*$/i;
 
 /** 工作、实习、项目类板块标题（其余板块如教育、技能、语言、兴趣等不属于经历） */
 const EXPERIENCE_SECTION_RE = /工作|实习|实践|项目|experience|projects?/i;
