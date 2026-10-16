@@ -23,12 +23,20 @@ export type ImportResponse = {
 };
 
 /**
- * 是否同一段经历：公司 + 岗位相同，且开始时间相同；两边都没写开始时间时也算同一段（重复导入同一份简历不会多出经历）。
- * 只有一边有开始时间时无法确认是同一段任职，保留为独立经历。
+ * 导入时找履历库里的同一段经历：公司 + 岗位相同，且开始时间都有并且相同；
+ * 开始时间缺失或不一致时，只有事实原文有重合（说明是重复导入同一份内容）才算同一段，否则保留为独立经历。
  */
-export function sameExperience(a: { company: string; title: string; start: string }, b: { company: string; title: string; start: string }) {
-  if (experienceKey(a) !== experienceKey(b)) return false;
-  return norm(a.start) === norm(b.start);
+export function findSameExperience<T extends { company: string; title: string; start: string; facts: { source: string }[] }>(
+  existing: T[],
+  imp: { company: string; title: string; start: string; facts: { source: string }[] },
+): number {
+  const strip = (s: string) => norm(s.replace(BULLET_RE, ""));
+  const candidates = existing.map((e, i) => ({ e, i })).filter(({ e }) => experienceKey(e) === experienceKey(imp));
+  const byStart = candidates.find(({ e }) => e.start.trim() && imp.start.trim() && norm(e.start) === norm(imp.start));
+  if (byStart) return byStart.i;
+  const sources = new Set(imp.facts.map((f) => strip(f.source)));
+  const byFacts = candidates.find(({ e }) => e.facts.some((f) => sources.has(strip(f.source))));
+  return byFacts ? byFacts.i : -1;
 }
 
 /** 同一段经历的判定键：company + title，忽略空白和大小写；两者都为空时返回空串（未归类） */

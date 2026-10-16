@@ -3,7 +3,7 @@
 import { useSyncExternalStore } from "react";
 import { postJson } from "@/components/ui";
 import { KEYS, read, uid, writeStored } from "@/lib/storage";
-import { BULLET_RE, sameExperience } from "@/lib/importText";
+import { BULLET_RE, findSameExperience } from "@/lib/importText";
 import type { ImportResponse } from "@/lib/importText";
 import type { Education, Experience, Profile, Requirement, ResumeResult } from "@/lib/types";
 import { educationKey } from "@/lib/education";
@@ -156,7 +156,7 @@ function applyImport(data: ImportResponse): ImportSummary {
   let duplicates = 0;
   for (const imp of data.experiences) {
     // 没有公司和岗位的「未归类」内容也合并到已有的未归类经历，重复导入时不再多出一段
-    const idx = experiences.findIndex((e) => sameExperience(e, imp));
+    const idx = findSameExperience(experiences, imp);
     const existing = idx >= 0 ? experiences[idx] : null;
     // 原文或整理后的文字任一相同都算重复（忽略行首项目符号），避免重复导入同一份简历时多出事实
     const strip = (s: string) => norm(s.replace(BULLET_RE, ""));
