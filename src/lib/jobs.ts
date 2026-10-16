@@ -205,7 +205,7 @@ function applyImport(data: ImportResponse): ImportSummary {
     education.push({ id: uid(), ...e, origin: "imported" });
     eduAdded++;
   }
-  if (eduAdded > 0) writeStored(KEYS.education, education);
+  if (eduAdded > 0 && !writeStored(KEYS.education, education)) throw new Error(STORAGE_FAILED);
 
   return { added, merged, facts, duplicates, rejected: data.rejected, profileFields, unassigned: data.unassigned, education: eduAdded };
 }
