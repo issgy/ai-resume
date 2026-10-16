@@ -94,7 +94,25 @@ export default function MatchPage() {
                     <div className="text-sm font-medium">{r.text}</div>
                   </div>
                   <div className="space-y-2 text-sm">
-                    {r.educationIds ? (
+                    {r.experienceIds ? (
+                      <>
+                        <ul className="space-y-1.5">
+                          {r.experienceIds.map((id) => {
+                            const e = experiences.find((x) => x.id === id);
+                            return e ? (
+                              <li key={id} className="flex gap-2">
+                                <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${r.coverage === "full" ? "bg-emerald-500" : "bg-amber-500"}`} />
+                                <span>
+                                  {[e.company, e.title, e.start || e.end ? `${e.start}–${e.end}` : ""].filter(Boolean).join(" · ")}{" "}
+                                  <span className="text-xs text-muted">· 任职经历</span>
+                                </span>
+                              </li>
+                            ) : null;
+                          })}
+                        </ul>
+                        {r.coverage === "none" && <p className="text-amber-800">不满足：{r.missing?.join("、")}，不会在简历中虚构</p>}
+                      </>
+                    ) : r.educationIds ? (
                       r.coverage === "none" ? (
                         <span className="text-amber-800">
                           {r.missing?.[0] === "履历库没有教育背景" ? (
