@@ -34,7 +34,27 @@ export const BULLET_RE =
 
 /** 常见板块标题（整行只有它），不作为事实 */
 const SECTION_LABEL_RE =
-  /^[\s#*【\[]*((教育|学习)(经历|背景)?|学历|(工作|实习|实践|校园|科研)(经历|经验)?|(主要)?项目(经历|经验)?|(专业|个人)?技能(特长|清单)?|技术栈|(个人|基本)(信息|资料)|自我评价|荣誉|获奖(情况)?|证书|education|(work |professional )?experience|projects?|skills?)[\]】:：\s]*$/i;
+  /^[\s#*【\[]*((教育|学习)(经历|背景)?|学历|(工作|实习|实践|校园|科研)(经历|经验)?|(主要)?项目(经历|经验)?|(专业|个人)?技能(特长|清单)?|技术栈|(个人|基本)(信息|资料|简介|总结|优势|评价|爱好)|自我(评价|介绍)|求职(意向|目标)|(外语|语言)(能力|水平)?|兴趣(爱好)?|爱好|特长|荣誉(奖项|称号)?|获奖(情况|经历)?|奖项|(资格|职业)?证书(资质)?|资质证书|培训(经历)?|在校经历|学生工作|社团(经历)?|(论文|专利|科研成果|学术成果)(发表)?|发表论文|其他(信息)?|附加信息|education|(work |professional |internship )?experience|projects?|skills?|summary|profile|objective|languages?|interests|hobbies|awards?|honors?|certifications?|publications?)[\]】:：\s]*$/i;
+
+/** 工作、实习、项目类板块标题（其余板块如教育、技能、语言、兴趣等不属于经历） */
+const EXPERIENCE_SECTION_RE = /工作|实习|实践|项目|experience|projects?/i;
+
+/** 是否为工作/实习/项目类板块标题 */
+export function isExperienceSection(line: string): boolean {
+  return SECTION_LABEL_RE.test(line) && EXPERIENCE_SECTION_RE.test(line);
+}
+
+/** 原文里是否有工作/实习/项目板块，且标题后面有内容：有的话，解析出 0 段经历就说明模型漏了 */
+export function hasExperienceSection(lines: string[]): boolean {
+  return lines.some((l, i) => {
+    if (!isExperienceSection(l)) return false;
+    for (const n of lines.slice(i + 1)) {
+      if (SECTION_LABEL_RE.test(n)) return false;
+      if (n.trim()) return true;
+    }
+    return false;
+  });
+}
 
 /** 是否为板块标题行（整行只有「技能」「教育经历」之类） */
 export function isSectionLabel(line: string): boolean {

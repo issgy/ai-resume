@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { callLLMJson } from "@/lib/llm";
 import { IMPORTER } from "@/lib/prompts";
 import { norm } from "@/lib/validate";
-import { BULLET_RE, IMPORT_MAX, IMPORT_MIN, experienceKey, isMetaLine, isSectionLabel, linesToSentences, literalSpan, numberLines } from "@/lib/importText";
+import { BULLET_RE, IMPORT_MAX, IMPORT_MIN, experienceKey, hasExperienceSection, isExperienceSection, isMetaLine, isSectionLabel, linesToSentences, literalSpan, numberLines } from "@/lib/importText";
 import type { ImportResponse, ImportedExperience } from "@/lib/importText";
 import type { Profile } from "@/lib/types";
 
@@ -41,7 +41,7 @@ export async function POST(req: Request) {
   const lines = text.split(/\r?\n/);
   let parsed: Parsed;
   try {
-    parsed = await parseStructure(numberLines(lines), Date.now() + DEADLINE_MS);
+    parsed = await parseStructure(numberLines(lines), Date.now() + DEADLINE_MS, hasExperienceSection(lines));
   } catch (e) {
     return NextResponse.json({ error: (e as Error)?.message || "解析失败，请重试" }, { status: 500 });
   }
@@ -123,10 +123,11 @@ export async function POST(req: Request) {
   // 教育、技能、证书等板块下的内容不属于经历，不计入
   const loose: ImportedExperience = { company: "", title: "", start: "", end: "", facts: [] };
   let unassigned = 0;
-  let inExperienceSection = true;
+  // 有板块标题时，第一个标题之前（联系方式、求职意向、个人总结等）不算经历；整份没有板块标题时才全部扫描
+  let inExperienceSection = !lines.some(isSectionLabel);
   lines.forEach((line, idx) => {
     if (isSectionLabel(line)) {
-      inExperienceSection = EXPERIENCE_SECTION_RE.test(line);
+      inExperienceSection = isExperienceSection(line);
       return;
     }
     if (!inExperienceSection || covered.has(idx + 1) || !BULLET_RE.test(line) || isMetaLine(line, metas)) return;
@@ -157,9 +158,6 @@ export async function POST(req: Request) {
   const body: ImportResponse = { experiences: merged, profile, rejected, unassigned };
   return NextResponse.json(body);
 }
-
-/** 工作、实习、项目类板块标题 */
-const EXPERIENCE_SECTION_RE = /工作|实习|实践|项目|experience|projects?/i;
 
 /** 行号范围：[起, 止]（1 起、闭区间）；空数组表示没有描述（返回 null）；格式不对或越界返回 undefined */
 function toRange(v: unknown, total: number): [number, number] | null | undefined {
@@ -196,7 +194,7 @@ function withDeadline<T>(p: Promise<T>, deadline: number): Promise<T> {
 }
 
 /** 返回必须是对象且 experiences 是数组；格式不对时在剩余时间充足时重试一次 */
-async function parseStructure(numbered: string, deadline: number): Promise<Parsed> {
+async function parseStructure(numbered: string, deadline: number, expectExperience: boolean): Promise<Parsed> {
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0 && deadline - Date.now() < RETRY_MIN_MS) break;
@@ -208,8 +206,13 @@ async function parseStructure(numbered: string, deadline: number): Promise<Parse
         ]),
         deadline,
       );
-      if (p && typeof p === "object" && !Array.isArray(p) && Array.isArray((p as Parsed).experiences)) return p as Parsed;
-      lastError = new Error("解析结果格式不对，请重试");
+      if (p && typeof p === "object" && !Array.isArray(p) && Array.isArray((p as Parsed).experiences)) {
+        // 原文明明有工作/实习/项目板块，模型却一段经历都没给：视为漏解析，重试；仍为空就报错，不当作导入成功
+        if ((p as Parsed).experiences.length > 0 || !expectExperience) return p as Parsed;
+        lastError = new Error("没有识别出经历，请重试；如果仍然失败，可以先删去和经历无关的内容再导入");
+      } else {
+        lastError = new Error("解析结果格式不对，请重试");
+      }
     } catch (e) {
       lastError = e;
     }
