@@ -76,7 +76,11 @@ function keepsAssignments(first: ImportResponse, again: ImportResponse): boolean
   const before = owner(first);
   const after = owner(again);
   for (const [src, key] of before) if (after.get(src) !== key) return false;
-  return after.size >= before.size;
+  // 第一次的每条事实（包括「未归类」里的）在重试结果里都要还在，不能静默丢失
+  const all = (body: ImportResponse) => new Set(body.experiences.flatMap((e) => e.facts.map((f) => norm(f.source))));
+  const againAll = all(again);
+  for (const src of all(first)) if (!againAll.has(src)) return false;
+  return true;
 }
 
 /** 由模型给出的结构组装导入结果；looseLines 是放入「未归类」的原文行号 */
@@ -270,7 +274,8 @@ function looksLikeHeader(line: string): boolean {
   if (!m) return false;
   const before = t.slice(0, m.index).trim();
   const after = t.slice(m.index! + m[0].length).trim();
-  if (before === "") return true;
+  // 时间在行首：后面必须像「公司 | 岗位」而不是一句描述
+  if (before === "") return after.length <= 40 && !/[，,。；;：:]/.test(after) && !/^(期间|内|起|至今)/.test(after) && !HEADER_VERB_RE.test(after);
   // 时间在行尾：前面必须像「公司 | 岗位」而不是一句描述（不含逗号句号、不以「负责、参与」等动词开头）
   if (after !== "" && !/^[|｜/·\-–—\s]*$/.test(after)) return false;
   return before.length <= 40 && !/[，,。；;：:]/.test(before) && !HEADER_VERB_RE.test(before);
