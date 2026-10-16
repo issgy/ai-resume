@@ -21,6 +21,20 @@ export type Experience = {
   facts: Fact[];
 };
 
+/** 教育背景：用于判断学历、专业类要求；导入时各字段都是原文中的逐字片段，source 是原文所在行 */
+export type Education = {
+  id: string;
+  school: string;
+  /** 学历，如「本科」「全日制硕士」 */
+  degree: string;
+  major: string;
+  start: string;
+  end: string;
+  /** 原文（导入时为原文所在行；手动填写时为空） */
+  source: string;
+  origin?: "imported" | "manual" | "edited";
+};
+
 export type Profile = {
   name: string;
   phone: string;
@@ -42,6 +56,10 @@ export type Requirement = {
   coverage?: Coverage;
   /** 要求中没有被所引事实覆盖的具体点；旧数据没有该字段 */
   missing?: string[];
+  /** 学历、专业类要求由程序按教育背景判断，依据是这些教育背景的 id（此时 factIds 为空） */
+  educationIds?: string[];
+  /** 不限领域的工作年限要求由程序按任职经历起止时间计算，依据是这些经历的 id（此时 factIds 为空） */
+  experienceIds?: string[];
 };
 
 export type QA = {

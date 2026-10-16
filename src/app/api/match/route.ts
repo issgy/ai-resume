@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { callLLMJson } from "@/lib/llm";
+import { sanitizeEducation } from "@/lib/education";
 import { checkRequirements } from "@/lib/match";
 import { MATCHER } from "@/lib/prompts";
 import type { Experience } from "@/lib/types";
@@ -7,7 +8,8 @@ import type { Experience } from "@/lib/types";
 export const maxDuration = 60;
 
 export async function POST(req: Request) {
-  const { jd, experiences } = (await req.json()) as { jd: string; experiences: Experience[] };
+  const { jd, experiences, education: rawEducation } = (await req.json()) as { jd: string; experiences: Experience[]; education?: unknown };
+  const education = sanitizeEducation(rawEducation);
   if (!jd || jd.trim().length < 50) {
     return NextResponse.json({ error: "JD 内容太短，请粘贴完整的岗位描述（职责 + 要求）" }, { status: 400 });
   }
@@ -31,7 +33,8 @@ export async function POST(req: Request) {
       { role: "user", content: `## 今天\n${today}\n\n## JD\n${jd}\n\n## 经历\n${JSON.stringify(payload)}` },
     ]);
     // 模型的覆盖结论只能被代码降级：技术词、复合要求、年限逐条核对，结构异常按缺口处理
-    const requirements = checkRequirements(data?.requirements, experiences);
+    // 学历、专业类要求由程序按教育背景判断
+    const requirements = checkRequirements(data?.requirements, experiences, { education });
     if (!requirements) {
       return NextResponse.json({ error: "匹配结果格式异常，请重新分析" }, { status: 502 });
     }

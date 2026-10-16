@@ -8,9 +8,13 @@ export const IMPORT_MAX = 8000;
 export type ImportedFact = { text: string; source: string };
 export type ImportedExperience = { company: string; title: string; start: string; end: string; facts: ImportedFact[] };
 
+/** 导入的教育背景：各字段都是原文中的逐字片段，source 是学校名所在的原文行 */
+export type ImportedEducation = { school: string; degree: string; major: string; start: string; end: string; source: string };
+
 /** /api/import 的返回 */
 export type ImportResponse = {
   experiences: ImportedExperience[];
+  education: ImportedEducation[];
   profile: Partial<Profile>;
   /** 行号范围无效的经历段数 + 在原文中找不到对应片段而丢弃的事实条数 */
   rejected: number;
@@ -18,10 +22,24 @@ export type ImportResponse = {
   unassigned: number;
 };
 
-/** 是否同一段经历：公司 + 岗位相同，且开始时间相同（任一方没写开始时间时按公司 + 岗位判断） */
-export function sameExperience(a: { company: string; title: string; start: string }, b: { company: string; title: string; start: string }) {
-  if (experienceKey(a) !== experienceKey(b)) return false;
-  return !a.start.trim() || !b.start.trim() || norm(a.start) === norm(b.start);
+/**
+ * 导入时找履历库里的同一段经历：公司 + 岗位相同，且开始时间都有并且相同；
+ * 开始时间缺失或不一致时，只有事实原文有重合（说明是重复导入同一份内容）才算同一段，否则保留为独立经历。
+ */
+export function findSameExperience<T extends { company: string; title: string; start: string; facts: { source: string }[] }>(
+  existing: T[],
+  imp: { company: string; title: string; start: string; facts: { source: string }[] },
+): number {
+  const strip = (s: string) => norm(s.replace(BULLET_RE, ""));
+  const candidates = existing.map((e, i) => ({ e, i })).filter(({ e }) => experienceKey(e) === experienceKey(imp));
+  const byStart = candidates.find(({ e }) => e.start.trim() && imp.start.trim() && norm(e.start) === norm(imp.start));
+  if (byStart) return byStart.i;
+  // 事实重合只用于至少一方缺开始时间的情况；双方开始时间都有且不同，就是两段任职
+  const sources = new Set(imp.facts.map((f) => strip(f.source)));
+  const byFacts = candidates.find(
+    ({ e }) => (!e.start.trim() || !imp.start.trim()) && e.facts.some((f) => sources.has(strip(f.source))),
+  );
+  return byFacts ? byFacts.i : -1;
 }
 
 /** 同一段经历的判定键：company + title，忽略空白和大小写；两者都为空时返回空串（未归类） */

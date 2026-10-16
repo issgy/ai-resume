@@ -4,11 +4,17 @@ import { useRef } from "react";
 import Link from "next/link";
 import { Button, Card, PageHeader } from "@/components/ui";
 import { KEYS, exportAll, importAll, uid, useStored } from "@/lib/storage";
-import type { Experience, Fact } from "@/lib/types";
+import type { Education, Experience, Fact } from "@/lib/types";
 
 export default function VaultPage() {
   const [experiences, setExperiences, loaded] = useStored<Experience[]>(KEYS.experiences, []);
+  const [education, setEducation] = useStored<Education[]>(KEYS.education, []);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  /** 修改教育背景：导入的条目改过之后标为「手动修改」，原文仍保留 */
+  function updateEdu(id: string, patch: Partial<Education>) {
+    setEducation((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch, origin: e.origin === "imported" ? "edited" : e.origin } : e)));
+  }
 
   function update(id: string, patch: Partial<Experience>) {
     setExperiences((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
@@ -63,6 +69,53 @@ export default function VaultPage() {
           </>
         }
       />
+
+      <Card className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">教育背景</h2>
+            <p className="text-xs text-muted">用于判断 JD 里的学历、专业要求</p>
+          </div>
+          <Button
+            variant="ghost"
+            onClick={() => setEducation((p) => [...p, { id: uid(), school: "", degree: "", major: "", start: "", end: "", source: "", origin: "manual" }])}
+          >
+            + 添加
+          </Button>
+        </div>
+        {education.length === 0 && <p className="text-sm text-muted">还没有教育背景。粘贴简历导入时会自动识别，也可以手动添加。</p>}
+        {education.map((e) => (
+          <div key={e.id} className="space-y-1.5 rounded-2xl border border-line bg-paper/60 p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <input className="field !w-auto flex-1 font-semibold sm:max-w-48" value={e.school} placeholder="学校" onChange={(ev) => updateEdu(e.id, { school: ev.target.value })} />
+              <input className="field !w-28" value={e.degree} placeholder="学历" onChange={(ev) => updateEdu(e.id, { degree: ev.target.value })} />
+              <input className="field !w-auto flex-1 sm:max-w-48" value={e.major} placeholder="专业" onChange={(ev) => updateEdu(e.id, { major: ev.target.value })} />
+              <div className="flex items-center gap-1.5">
+                <input className="field !w-24" value={e.start} placeholder="入学" onChange={(ev) => updateEdu(e.id, { start: ev.target.value })} />
+                <span className="text-muted">–</span>
+                <input className="field !w-24" value={e.end} placeholder="毕业" onChange={(ev) => updateEdu(e.id, { end: ev.target.value })} />
+              </div>
+              <button
+                className="ml-auto h-8 w-8 shrink-0 rounded-full text-muted transition hover:bg-red-50 hover:text-red-600"
+                title="删除这段教育背景"
+                onClick={() => setEducation((p) => p.filter((x) => x.id !== e.id))}
+              >
+                ×
+              </button>
+            </div>
+            {e.source && (
+              <div className="px-1 text-xs text-muted">
+                {e.origin === "edited" ? (
+                  <span className="mr-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-amber-800">手动修改</span>
+                ) : (
+                  <span className="mr-1 rounded-full bg-sky-50 px-1.5 py-0.5 text-sky-800">简历导入</span>
+                )}
+                原文：「{e.source}」
+              </div>
+            )}
+          </div>
+        ))}
+      </Card>
 
       {experiences.length === 0 && (
         <Card className="py-14 text-center">

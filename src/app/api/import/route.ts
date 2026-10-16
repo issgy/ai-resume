@@ -3,12 +3,12 @@ import { callLLMJson } from "@/lib/llm";
 import { IMPORTER } from "@/lib/prompts";
 import { norm } from "@/lib/validate";
 import { BULLET_RE, IMPORT_MAX, IMPORT_MIN, experienceKey, hasExperienceSection, isExperienceSection, isMetaLine, isSectionLabel, linesToSentences, literalSpan, numberLines } from "@/lib/importText";
-import type { ImportResponse, ImportedExperience } from "@/lib/importText";
+import type { ImportResponse, ImportedEducation, ImportedExperience } from "@/lib/importText";
 import type { Profile } from "@/lib/types";
 
 export const maxDuration = 60;
 
-type Parsed = { profile?: Partial<Record<keyof Profile, unknown>>; experiences: unknown[] };
+type Parsed = { profile?: Partial<Record<keyof Profile, unknown>>; experiences: unknown[]; education?: unknown };
 
 const UNASSIGNED = "\u0000unassigned";
 const PROFILE_KEYS = ["name", "phone", "email", "school", "birthday"] as const;
@@ -39,17 +39,81 @@ export async function POST(req: Request) {
   if (text.length > IMPORT_MAX) return NextResponse.json({ error: `内容太长（最多 ${IMPORT_MAX} 字）` }, { status: 400 });
 
   const lines = text.split(/\r?\n/);
+  const deadline = Date.now() + DEADLINE_MS;
   let parsed: Parsed;
   try {
-    parsed = await parseStructure(numberLines(lines), Date.now() + DEADLINE_MS, hasExperienceSection(lines));
+    parsed = await parseStructure(numberLines(lines), deadline, hasExperienceSection(lines));
   } catch (e) {
     return NextResponse.json({ error: (e as Error)?.message || "解析失败，请重试" }, { status: 500 });
   }
 
+  let result = assemble(parsed, text, lines);
+  // 有内容没归到任何经历（多半是模型漏了一段经历）且时间够：把这些行号告诉模型，让它重新完整识别一次，取未归类更少的结果
+  if (result.looseLines.length > 0 && deadline - Date.now() >= RETRY_MIN_MS) {
+    const hint = `\n\n注意：上次识别漏掉了第 ${result.looseLines.join("、")} 行所在的经历。请重新完整识别，每一段工作、实习、项目经历（包括项目经历板块下的每个项目）都要单独输出一项。`;
+    try {
+      const again = assemble(await parseStructure(numberLines(lines) + hint, deadline, hasExperienceSection(lines)), text, lines);
+      // 只有「未归类更少、事实没变少、第一次识别出的每条事实在重试结果里仍归在同名经历下」才采用重试结果
+      if (again.body.unassigned < result.body.unassigned && keepsAssignments(result.body, again.body)) result = again;
+    } catch {
+      // 重试失败就用第一次的结果
+    }
+  }
+  return NextResponse.json(result.body);
+}
+
+/** 第一次已归到具体经历的每条事实，在重试结果里仍在同名经历下（不丢、不改归属） */
+function keepsAssignments(first: ImportResponse, again: ImportResponse): boolean {
+  const owner = (body: ImportResponse) => {
+    const m = new Map<string, string>();
+    for (const e of body.experiences) {
+      const key = experienceKey(e);
+      if (!key) continue; // 未归类
+      for (const f of e.facts) m.set(norm(f.source), key);
+    }
+    return m;
+  };
+  const before = owner(first);
+  const after = owner(again);
+  for (const [src, key] of before) if (after.get(src) !== key) return false;
+  // 第一次的每条事实（包括「未归类」里的）在重试结果里都要还在，不能静默丢失
+  const all = (body: ImportResponse) => new Set(body.experiences.flatMap((e) => e.facts.map((f) => norm(f.source))));
+  const againAll = all(again);
+  for (const src of all(first)) if (!againAll.has(src)) return false;
+  return true;
+}
+
+/** 由模型给出的结构组装导入结果；looseLines 是放入「未归类」的原文行号 */
+function assemble(parsed: Parsed, text: string, lines: string[]): { body: ImportResponse; looseLines: number[] } {
   const profile: Partial<Profile> = {};
   for (const k of PROFILE_KEYS) {
     const v = field(parsed.profile?.[k], text);
     if (v) profile[k] = v;
+  }
+
+  // 教育背景：学校必须能在原文中找到；原文行取模型给的行号（该行要包含学校名），否则用学校名所在的第一行
+  const education: ImportedEducation[] = [];
+  const eduSeen = new Set<string>();
+  for (const e of Array.isArray(parsed.education) ? parsed.education : []) {
+    if (!e || typeof e !== "object" || Array.isArray(e)) continue;
+    const r = e as Record<string, unknown>;
+    const school = field(r.school, text);
+    if (!school) continue;
+    const n = typeof r.line === "string" ? Number(r.line) : r.line;
+    const has = (l: string | undefined) => !!l && norm(l).includes(norm(school));
+    const line = Number.isInteger(n) && has(lines[(n as number) - 1]) ? lines[(n as number) - 1] : lines.find(has);
+    const item: ImportedEducation = {
+      school,
+      degree: field(r.degree, text),
+      major: field(r.major, text),
+      start: field(r.start, text),
+      end: field(r.end, text),
+      source: (line ?? school).trim(),
+    };
+    const key = `${norm(item.school)}|${norm(item.degree)}|${norm(item.major)}|${norm(item.start)}`;
+    if (eduSeen.has(key)) continue;
+    eduSeen.add(key);
+    education.push(item);
   }
 
   // 先整理各段经历的基本信息，用于识别标题行
@@ -89,20 +153,24 @@ export async function POST(req: Request) {
   const extend = (range: [number, number]): [number, number] => {
     const next = starts.find((s) => s > range[0]);
     let end = next !== undefined ? next - 1 : lines.length;
-    // 中途遇到板块标题（技能、教育经历等）就停
-    for (let i = range[0]; i <= end; i++) {
+    // 中途遇到板块标题（技能、教育经历等）就停；模型给的结束行越过板块标题时也以板块标题为准
+    let capped = false;
+    for (let i = range[0]; i <= Math.max(range[1], end); i++) {
       if (isSectionLabel(lines[i - 1])) {
         end = Math.max(range[0], i - 1);
+        capped = true;
         break;
       }
     }
-    for (let i = range[1] + 1; i <= end; i++) {
+    if (!capped) end = Math.max(range[1], end);
+    // 模型给的范围里也可能夹着它漏掉的经历标题，所以从第二行起整段检查
+    for (let i = range[0] + 1; i <= end; i++) {
       if (looksLikeHeader(lines[i - 1])) {
         orphans.push([i + 1, end]);
         return [range[0], i - 1];
       }
     }
-    return [range[0], Math.max(range[1], end)];
+    return [range[0], end];
   };
 
   let rejected = 0;
@@ -130,12 +198,16 @@ export async function POST(req: Request) {
 
   const loose: ImportedExperience = { company: "", title: "", start: "", end: "", facts: [] };
   let unassigned = 0;
+  const looseLines: number[] = [];
   for (const [from, to] of orphans) {
     const own: string[] = [];
     for (let i = from; i <= to; i++) {
       if (covered.has(i)) continue;
       covered.add(i);
-      if (lines[i - 1].trim()) own.push(lines[i - 1]);
+      if (lines[i - 1].trim()) {
+        own.push(lines[i - 1]);
+        looseLines.push(i);
+      }
     }
     const facts = toFacts(own).filter((f) => f !== null);
     if (facts.length === 0) continue;
@@ -156,6 +228,7 @@ export async function POST(req: Request) {
     const facts = toFacts([line]).filter((f) => f !== null);
     if (facts.length === 0) return;
     unassigned++;
+    looseLines.push(idx + 1);
     loose.facts.push(...facts);
   });
 
@@ -164,7 +237,8 @@ export async function POST(req: Request) {
   const byKey = new Map<string, ImportedExperience>();
   for (const exp of [...entries.map((e) => e.exp), loose]) {
     // 同公司同岗位、但起止时间不同的是两段任职，不合并
-    const key = experienceKey(exp) ? `${experienceKey(exp)}|${norm(exp.start)}` : UNASSIGNED;
+    // 同一份简历里没有开始时间的同名经历无法确认是同一段，各自保留
+    const key = experienceKey(exp) ? `${experienceKey(exp)}|${exp.start.trim() ? norm(exp.start) : `#${merged.length}`}` : UNASSIGNED;
     if (exp.facts.length === 0 && (key === UNASSIGNED || !exp.company)) continue;
     const same = byKey.get(key);
     if (!same) {
@@ -178,18 +252,33 @@ export async function POST(req: Request) {
     same.facts = dedupe([...same.facts, ...exp.facts]);
   }
 
-  const body: ImportResponse = { experiences: merged, profile, rejected, unassigned };
-  return NextResponse.json(body);
+  const body: ImportResponse = { experiences: merged, education, profile, rejected, unassigned };
+  return { body, looseLines };
 }
 
 /** 起止时间：2021.07-2023.06、2026 年 6 月--至今、Jan 2022 – Present 等（年份后必须带月份，避免把「2022-2024 年规划」当成时间段） */
 const DATE_RANGE_RE =
   /(?:(?:19|20)\d{2}\s*[年./-]\s*\d{1,2}\s*月?|[A-Za-z]{3,9}\.?\s+(?:19|20)\d{2})\s*(?:[-–—~～至到]+|to)\s*(?:(?:19|20)\d{2}\s*[年./-]\s*\d{1,2}\s*月?|[A-Za-z]{3,9}\.?\s+(?:19|20)\d{2}|至今|今|现在|present|now)/i;
 
-/** 像一段经历的标题行：不是项目符号开头、不长、含起止时间 */
+/** 描述句常见的开头动词 */
+const HEADER_VERB_RE = /^(负责|参与|主导|完成|实现|设计|开发|搭建|推动|带领|协助|优化|维护|组织|策划|撰写|制定|跟进|对接|支持|周期)/;
+
+/**
+ * 像一段经历的标题行：不是项目符号开头、不长、不以句末标点结尾，且起止时间在行首或行尾
+ * （「字节跳动 | 工程师 | 2021.07-至今」「2021.07-2023.06 腾讯」）；时间写在句子中间的是描述，不算标题
+ */
 function looksLikeHeader(line: string): boolean {
   const t = line.trim();
-  return t.length > 0 && t.length <= 80 && !BULLET_RE.test(t) && DATE_RANGE_RE.test(t);
+  if (!t || t.length > 80 || BULLET_RE.test(t) || /[。；;！!？?，,]$/.test(t)) return false;
+  const m = t.match(DATE_RANGE_RE);
+  if (!m) return false;
+  const before = t.slice(0, m.index).trim();
+  const after = t.slice(m.index! + m[0].length).trim();
+  // 时间在行首：后面必须像「公司 | 岗位」而不是一句描述
+  if (before === "") return after.length <= 40 && !/[，,。；;：:]/.test(after) && !/^(期间|内|起|至今)/.test(after) && !HEADER_VERB_RE.test(after);
+  // 时间在行尾：前面必须像「公司 | 岗位」而不是一句描述（不含逗号句号、不以「负责、参与」等动词开头）
+  if (after !== "" && !/^[|｜/·\-–—\s]*$/.test(after)) return false;
+  return before.length <= 40 && !/[，,。；;：:]/.test(before) && !HEADER_VERB_RE.test(before);
 }
 
 /** 行号范围：[起, 止]（1 起、闭区间）；空数组表示没有描述（返回 null）；格式不对或越界返回 undefined */

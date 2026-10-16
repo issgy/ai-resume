@@ -100,6 +100,7 @@ function PasteImport() {
             <li>新增 {s.added} 段经历，合并到已有经历 {s.merged} 段，共写入 {s.facts} 条事实</li>
             {s.duplicates > 0 && <li className="text-muted">{s.duplicates} 条与履历库中已有事实出自同一原文，已跳过</li>}
             {s.rejected > 0 && <li className="text-warn">{s.rejected} 条因在原文中找不到依据被丢弃</li>}
+            {!!s.education && <li>新增 {s.education} 段教育背景，可在履历库查看和修改</li>}
             <li>{s.profileFields.length > 0 ? `个人信息填充了：${s.profileFields.join("、")}` : "个人信息没有需要填充的字段（已填写的不会被覆盖）"}</li>
             {s.unassigned > 0 && (
               <li className="text-warn">

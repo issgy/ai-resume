@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button, Card, ErrorText, PageHeader } from "@/components/ui";
 import { KEYS, useStored } from "@/lib/storage";
-import type { Experience, MatchResult, Requirement } from "@/lib/types";
+import type { Education, Experience, MatchResult, Requirement } from "@/lib/types";
+import { educationLabel } from "@/lib/education";
 import { checkRequirements } from "@/lib/match";
 import { attachResumeRedirect, runMatch, runResume, useJobs } from "@/lib/jobs";
 
@@ -19,6 +21,8 @@ export default function MatchPage() {
   const [experiences] = useStored<Experience[]>(KEYS.experiences, []);
   const [match] = useStored<MatchResult | null>(KEYS.match, null);
   const [jdDraft] = useStored<string>(KEYS.jdDraft, "");
+  const [education] = useStored<Education[]>(KEYS.education, []);
+  const eduById = new Map(education.map((e) => [e.id, e]));
   const [jd, setJd] = useState("");
   // 任务在 jobs 模块里后台运行，离开本页不会中断；回到本页时仍能看到进行中的阶段
   const jobs = useJobs();
@@ -27,7 +31,7 @@ export default function MatchPage() {
   const currentJd = jd || match?.jd || jdDraft;
   const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, { ...f, exp: e }] as const)));
   // 存下的匹配结果（含没有 coverage 的旧数据）按当前履历库重新核对，结论只会被降级
-  const requirements: Requirement[] = match ? (checkRequirements(match.requirements, experiences, { legacy: true }) ?? []) : [];
+  const requirements: Requirement[] = match ? (checkRequirements(match.requirements, experiences, { legacy: true, education }) ?? []) : [];
 
   // 生成完成时用户仍在本页才跳转到简历页；已离开则由顶部导航提示，不强行拽走
   useEffect(() => attachResumeRedirect(() => router.push("/resume")), [router]);
@@ -90,7 +94,52 @@ export default function MatchPage() {
                     <div className="text-sm font-medium">{r.text}</div>
                   </div>
                   <div className="space-y-2 text-sm">
-                    {r.coverage === "none" ? (
+                    {r.experienceIds ? (
+                      <>
+                        <ul className="space-y-1.5">
+                          {r.experienceIds.map((id) => {
+                            const e = experiences.find((x) => x.id === id);
+                            return e ? (
+                              <li key={id} className="flex gap-2">
+                                <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${r.coverage === "full" ? "bg-emerald-500" : "bg-amber-500"}`} />
+                                <span>
+                                  {[e.company, e.title, e.start || e.end ? `${e.start}–${e.end}` : ""].filter(Boolean).join(" · ")}{" "}
+                                  <span className="text-xs text-muted">· 任职经历</span>
+                                </span>
+                              </li>
+                            ) : null;
+                          })}
+                        </ul>
+                        {r.coverage === "none" && <p className="text-amber-800">不满足：{r.missing?.join("、")}，不会在简历中虚构</p>}
+                      </>
+                    ) : r.educationIds ? (
+                      r.coverage === "none" ? (
+                        <span className="text-amber-800">
+                          {r.missing?.[0] === "履历库没有教育背景" ? (
+                            <>
+                              履历库还没有教育背景，
+                              <Link href="/vault" className="underline underline-offset-4">去履历库补充</Link>
+                            </>
+                          ) : (
+                            <>不满足：{r.missing?.join("、")}，不会在简历中虚构</>
+                          )}
+                        </span>
+                      ) : (
+                        <ul className="space-y-1.5">
+                          {r.educationIds.map((id) => {
+                            const e = eduById.get(id);
+                            return e ? (
+                              <li key={id} className="flex gap-2">
+                                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+                                <span>
+                                  {educationLabel(e)} <span className="text-xs text-muted">· 教育背景</span>
+                                </span>
+                              </li>
+                            ) : null;
+                          })}
+                        </ul>
+                      )
+                    ) : r.coverage === "none" ? (
                       <span className="text-amber-800">履历库里没有对应经历，不会在简历中虚构</span>
                     ) : (
                       <ul className="space-y-1.5">

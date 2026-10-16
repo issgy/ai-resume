@@ -1,5 +1,6 @@
-import type { Coverage, Experience, Requirement } from "./types";
-import { TERM_RE } from "./validate";
+import type { Coverage, Education, Experience, Requirement } from "./types";
+import { checkEducation, isEducationRequirement } from "./education";
+import { TERM_RE, norm } from "./validate";
 
 const COVERAGES: Coverage[] = ["full", "partial", "none"];
 const RANK: Record<Coverage, number> = { none: 0, partial: 1, full: 2 };
@@ -104,6 +105,76 @@ export function isPureYearsMissing(s: string, requirement = ""): boolean {
   return rest.replace(YEARS_FILLER_RE, "") === "";
 }
 
+/** 年限要求里不指向具体领域的词：去掉后什么都不剩，就是不限领域的工作年限要求 */
+const GENERIC_YEARS_FILLER_RE = /全职|工作经验|工作经历|工作年限|从业经验|从业|经验|工作|以上|及|或|者优先|优先|要求|的|[，,。;；\s]/g;
+
+/** 「1 年以上工作经验」「3年及以上全职工作经验」这类不限领域的年限要求（「相关」「前端开发」等有领域的交给模型） */
+export function isGenericYearsRequirement(text: string): boolean {
+  if (requiredYears(text) === null) return false;
+  return text.replace(YEARS_RE, "").replace(GENERIC_YEARS_FILLER_RE, "") === "";
+}
+
+/** 实习、兼职、校园任职 */
+const NON_FULLTIME_RE = /实习|兼职|校园|学生会|社团|助教|助研|intern|part[\s-]?time/i;
+
+/** 时长的中文写法：不足 1 年按月，否则保留一位小数 */
+function durationLabel(years: number): string {
+  const months = Math.round(years * 12);
+  return months < 12 ? `${months} 个月` : `${Math.round(years * 10) / 10} 年`;
+}
+
+/**
+ * 按任职经历（有岗位名的经历；没有岗位名的多是项目经历，不计入）的起止时间合计工作年限。
+ * 起止时间解析不了时最多 partial；够年限为 full；不够为缺口并写明实际时长。依据记在 experienceIds。
+ */
+export function checkWorkYears(
+  years: number,
+  experiences: Experience[],
+  now = new Date(),
+  text = "",
+): { coverage: Coverage; missing: string[]; experienceIds: string[] } {
+  // 能看出是实习、兼职、校园任职的不计入工作年限
+  const jobs = experiences.filter((e) => e.title.trim() && !NON_FULLTIME_RE.test(`${e.company} ${e.title}`));
+  if (jobs.length === 0) return { coverage: "none", missing: ["履历库里没有正式任职经历（实习、兼职、项目经历不计入）"], experienceIds: [] };
+  const have = experienceYears(jobs, now);
+  const ids = jobs.map((e) => e.id);
+  if (have === null) {
+    return { coverage: "partial", missing: [`经历起止时间不完整，无法核实 ${years} 年工作年限`], experienceIds: ids };
+  }
+  if (have < years) return { coverage: "none", missing: [`需要 ${years} 年以上，任职经历合计约 ${durationLabel(have)}`], experienceIds: ids };
+  // 够年限，但程序看不出每段是不是全职（岗位名里不一定写「实习」）：要求明确写「全职」时最多部分覆盖
+  if (/全职/.test(text)) {
+    return { coverage: "partial", missing: ["无法确认以上经历均为全职，请自行核对"], experienceIds: ids };
+  }
+  return { coverage: "full", missing: [], experienceIds: ids };
+}
+
+/** 一条要求最多引用的事实条数（提示词要求 1-3 条）；超过视为没有找到直接依据 */
+export const MAX_CITED = 3;
+export const BROAD_MISSING = "没有找到直接对应的经历";
+/** 软素质：无法用经历事实证明，模型泛泛引用时按缺口处理 */
+const SOFT_SKILL_RE = /沟通|协作|合作|团队精神|责任心|责任感|抗压|学习能力|自驱|自我驱动|执行力|主动|表达|逻辑思维|热爱|积极|细心|认真|吃苦|好奇心|进取|踏实|稳定/;
+/** 相关但原文没有直接写到的关键词 */
+export function relatedMissing(keys: string[]): string {
+  return `${keys.join("、")}（原文没有直接写到，以上为相关经历）`;
+}
+
+/** 要求里的修饰词：去掉后剩下的才是要核对的关键词 */
+const REQ_FILLER_RE =
+  /熟悉|熟练(使用|掌握)?|掌握|精通|了解|理解|常用|常见|主流|相关|具备|具有|拥有|良好的?|较强的?|优秀的?|扎实的?|丰富的?|一定的?|基本|基础|原理|经验|能力|技能|知识|背景|技术|框架|工具|方法|者优先|优先|以上|及|等|的|有|能/g;
+
+/** 「熟悉常用机器学习/NLP/图像分析等算法原理」→ ["机器学习", "nlp", "图像分析", "算法"] */
+export function requirementKeywords(text: string): string[] {
+  return [
+    ...new Set(
+      text
+        .split(/[、，,／/;；和与或及等\s()（）]+/)
+        .map((w) => norm(w.replace(REQ_FILLER_RE, "")))
+        .filter((w) => w.length >= 2),
+    ),
+  ];
+}
+
 export const COMPOUND_MISSING = "该条包含多项要求，未能逐项确认";
 
 /**
@@ -128,7 +199,7 @@ export function isCompoundRequirement(text: string): boolean {
 export function checkRequirements(
   raw: unknown,
   experiences: Experience[],
-  opts: { legacy?: boolean; now?: Date } = {},
+  opts: { legacy?: boolean; now?: Date; education?: Education[] } = {},
 ): Requirement[] | null {
   if (!Array.isArray(raw)) return null;
   const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, { fact: f, exp: e }] as const)));
@@ -139,6 +210,16 @@ export function checkRequirements(
     const text = textOk ? (r.text as string).trim() : "（这条要求格式异常，按缺口处理）";
     const type = r.type === "nice" ? "nice" : "must";
     const gap: Requirement = { text, type, factIds: [], coverage: "none", missing: [] };
+
+    // 学历、专业类要求不看模型的结论，由程序按教育背景判断
+    if (textOk && isEducationRequirement(text)) {
+      return { text, type, factIds: [], ...checkEducation(text, opts.education ?? [], opts.now) };
+    }
+
+    // 不限领域的工作年限（「1 年以上工作经验」）：和具体哪条事实无关，由程序按任职经历的起止时间计算
+    if (textOk && isGenericYearsRequirement(text)) {
+      return { text, type, factIds: [], ...checkWorkYears(requiredYears(text)!, experiences, opts.now, text) };
+    }
 
     const rawIds = strings(r.factIds);
     const modelMissing = r.missing === undefined ? [] : strings(r.missing);
@@ -154,6 +235,38 @@ export function checkRequirements(
     const factIds = [...new Set(rawIds.filter((id) => factById.has(id)))];
     if (factIds.length === 0 || coverage === "none") return { ...gap, missing: modelMissing };
 
+    // 一条要求引用了一大片事实，说明模型没有挑选、只是把能看到的都列上了：只保留和要求有关键词重合的事实，
+    // 按命中的关键词数排序取前 MAX_CITED 条；一条都不剩说明没有直接依据，按缺口处理
+    let relatedOnly: string[] | null = null;
+    if (factIds.length > MAX_CITED) {
+      const keys = requirementKeywords(text);
+      const hits = (id: string) => {
+        const src = norm(factById.get(id)!.fact.source).toLowerCase();
+        return keys.filter((k) => src.includes(k.toLowerCase())).length;
+      };
+      const kept = factIds
+        .map((id, i) => ({ id, i, n: hits(id) }))
+        .filter((x) => x.n > 0)
+        .sort((a, b) => b.n - a.n || a.i - b.i)
+        .slice(0, MAX_CITED)
+        .sort((a, b) => a.i - b.i)
+        .map((x) => x.id);
+      if (kept.length === 0) {
+        // 沟通、协作这类软素质无法用经历事实证明：按缺口处理
+        if (SOFT_SKILL_RE.test(text)) return { ...gap, missing: [BROAD_MISSING] };
+        // 其余视为「相关但原文没直接写到」（如做 RAG/Agent 对应「熟悉 NLP」）：最多部分覆盖，
+        // 保留模型排在前面的 MAX_CITED 条作为相关经历，并写明原文缺的关键词
+        relatedOnly = keys;
+        kept.push(...factIds.slice(0, MAX_CITED));
+      }
+      factIds.splice(0, factIds.length, ...kept);
+      // 关键词命中只用来挑候选依据：留下的事实没有覆盖要求里的全部关键词时，最多部分覆盖并写明缺的词
+      if (!relatedOnly) {
+        const evidenceText = norm(kept.map((id) => factById.get(id)!.fact.source).join(" ")).toLowerCase();
+        const lacking = keys.filter((k) => !evidenceText.includes(k.toLowerCase()));
+        if (lacking.length > 0) relatedOnly = lacking;
+      }
+    }
     const cited = factIds.map((id) => factById.get(id)!);
     const years = requiredYears(text);
     const have = years === null ? null : experienceYears([...new Map(cited.map(({ exp }) => [exp.id, exp])).values()], opts.now);
@@ -164,17 +277,25 @@ export function checkRequirements(
     const extra: string[] = [];
     // 模型自己列出了缺失点却又标 full，结论自相矛盾
     if (missing.length > 0) result = cap(result, "partial");
+    if (relatedOnly) {
+      result = cap(result, "partial");
+      extra.push(relatedMissing(relatedOnly));
+    }
+
 
     // 只认用户原话 source；text 是 AI 整理的表述，可能已含幻觉（与 /api/verify 一致）
     const evidence = cited.map(({ fact }) => fact.source).join(" ");
     const evidenceTerms = new Set((evidence.match(TERM_RE) ?? []).map((t) => t.toLowerCase()));
     const unknownTerms = [...new Set((text.match(TERM_RE) ?? []).filter((t) => !evidenceTerms.has(t.toLowerCase())))];
+    // 「原文没有直接写到」里已经列出的技术词不再重复
+    if (relatedOnly) unknownTerms.splice(0, unknownTerms.length, ...unknownTerms.filter((t) => !relatedOnly!.some((k) => k.toLowerCase() === t.toLowerCase())));
     if (unknownTerms.length > 0) {
       result = cap(result, "partial");
       extra.push(...unknownTerms);
     }
 
-    if (isCompoundRequirement(text)) {
+    // 已经逐个列出原文没写到的关键词时，不再提示「包含多项要求」
+    if (!relatedOnly && isCompoundRequirement(text)) {
       result = cap(result, "partial");
       extra.push(COMPOUND_MISSING);
     }

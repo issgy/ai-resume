@@ -5,6 +5,8 @@ import { useCallback, useEffect, useState } from "react";
 export const KEYS = {
   experiences: "air:experiences",
   profile: "air:profile",
+  /** 教育背景 */
+  education: "air:education",
   chat: "air:chat",
   match: "air:match",
   resume: "air:resume",
