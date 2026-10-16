@@ -157,8 +157,11 @@ export function applyQA(h: Highlight, raw: unknown, experiences: Experience[]): 
   // 亮点本身已通过核验、出自原话，追问答不上来不再剔除亮点（产品决策）：答不上来的追问不展示编造的回答，
   // 标为「需要你补充」；展示前 3 组（PRD「2-3 个追问」），答得上来的排在前面
   const questions = parsed.map((qa) => checkAnswer(qa, exp.facts, facts));
-  const ordered = [...questions.filter((q) => !isInsufficient(q)), ...questions.filter(isInsufficient)];
-  return { kept: { ...h, questions: ordered.slice(0, 3) } };
+  const good = questions.filter((q) => !isInsufficient(q));
+  const weak = questions.filter(isInsufficient);
+  // 有需要补充的题时至少保留一道，不让它被截掉而看不到提示
+  const shown = weak.length > 0 ? [...good.slice(0, 2), ...weak].slice(0, 3) : good.slice(0, 3);
+  return { kept: { ...h, questions: shown } };
 }
 
 /**
