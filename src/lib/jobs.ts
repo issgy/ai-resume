@@ -5,7 +5,8 @@ import { postJson } from "@/components/ui";
 import { KEYS, read, uid, writeStored } from "@/lib/storage";
 import { BULLET_RE, experienceKey } from "@/lib/importText";
 import type { ImportResponse } from "@/lib/importText";
-import type { Experience, Profile, Requirement, ResumeResult } from "@/lib/types";
+import type { Education, Experience, Profile, Requirement, ResumeResult } from "@/lib/types";
+import { educationKey } from "@/lib/education";
 import { failQA, failVerification, norm } from "@/lib/validate";
 
 /**
@@ -32,6 +33,8 @@ export type ImportSummary = {
   profileFields: string[];
   /** 没能归到具体经历、已放入「未归类」的行数 */
   unassigned: number;
+  /** 新增的教育背景条数（与已有学校 + 学历相同的跳过）；旧版本没有该字段 */
+  education?: number;
 };
 
 export type JobsState = {
@@ -190,7 +193,19 @@ function applyImport(data: ImportResponse): ImportSummary {
   }
   if (profileFields.length > 0) writeStored(KEYS.profile, profile);
 
-  return { added, merged, facts, duplicates, rejected: data.rejected, profileFields, unassigned: data.unassigned };
+  // 教育背景：学校 + 学历相同的视为同一段，跳过
+  const education = read<Education[]>(KEYS.education, []);
+  const eduKeys = new Set(education.map(educationKey));
+  let eduAdded = 0;
+  for (const e of data.education ?? []) {
+    if (eduKeys.has(educationKey(e))) continue;
+    eduKeys.add(educationKey(e));
+    education.push({ id: uid(), ...e, origin: "imported" });
+    eduAdded++;
+  }
+  if (eduAdded > 0) writeStored(KEYS.education, education);
+
+  return { added, merged, facts, duplicates, rejected: data.rejected, profileFields, unassigned: data.unassigned, education: eduAdded };
 }
 
 export async function runImport(text: string) {
@@ -219,7 +234,8 @@ export async function runMatch(jd: string, experiences: Experience[]) {
   update({ match: "match", error: "", notice: null });
   markPending("match", true);
   try {
-    const { requirements } = await postJson<{ requirements: Requirement[] }>("/api/match", { jd, experiences });
+    const education = read<Education[]>(KEYS.education, []);
+    const { requirements } = await postJson<{ requirements: Requirement[] }>("/api/match", { jd, experiences, education });
     writeStored(KEYS.match, { jd, requirements });
     update({ match: null, notice: { tone: "success", text: "匹配分析已完成，点击查看", href: "/match" } });
   } catch (e) {
@@ -235,7 +251,7 @@ export async function runResume(jd: string, requirements: Requirement[], experie
   update({ resume: "resume", error: "", notice: null });
   markPending("resume", true);
   try {
-    const data = await postJson<Pick<ResumeResult, "highlights" | "dropped" | "failedExperienceIds">>("/api/resume", { jd, requirements, experiences });
+    const data = await postJson<Pick<ResumeResult, "highlights" | "dropped" | "failedExperienceIds">>("/api/resume", { jd, requirements, experiences, education: read<Education[]>(KEYS.education, []) });
     // 规则校验通过的亮点再做一次大模型内容核验；核验请求整体失败时这批亮点全部剔除，不放行未核验内容
     let verified: Pick<ResumeResult, "highlights" | "dropped"> = { highlights: [], dropped: [] };
     if (data.highlights.length > 0) {

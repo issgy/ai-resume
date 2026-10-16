@@ -8,9 +8,13 @@ export const IMPORT_MAX = 8000;
 export type ImportedFact = { text: string; source: string };
 export type ImportedExperience = { company: string; title: string; start: string; end: string; facts: ImportedFact[] };
 
+/** 导入的教育背景：各字段都是原文中的逐字片段，source 是学校名所在的原文行 */
+export type ImportedEducation = { school: string; degree: string; major: string; start: string; end: string; source: string };
+
 /** /api/import 的返回 */
 export type ImportResponse = {
   experiences: ImportedExperience[];
+  education: ImportedEducation[];
   profile: Partial<Profile>;
   /** 行号范围无效的经历段数 + 在原文中找不到对应片段而丢弃的事实条数 */
   rejected: number;

@@ -3,12 +3,12 @@ import { callLLMJson } from "@/lib/llm";
 import { IMPORTER } from "@/lib/prompts";
 import { norm } from "@/lib/validate";
 import { BULLET_RE, IMPORT_MAX, IMPORT_MIN, experienceKey, hasExperienceSection, isExperienceSection, isMetaLine, isSectionLabel, linesToSentences, literalSpan, numberLines } from "@/lib/importText";
-import type { ImportResponse, ImportedExperience } from "@/lib/importText";
+import type { ImportResponse, ImportedEducation, ImportedExperience } from "@/lib/importText";
 import type { Profile } from "@/lib/types";
 
 export const maxDuration = 60;
 
-type Parsed = { profile?: Partial<Record<keyof Profile, unknown>>; experiences: unknown[] };
+type Parsed = { profile?: Partial<Record<keyof Profile, unknown>>; experiences: unknown[]; education?: unknown };
 
 const UNASSIGNED = "\u0000unassigned";
 const PROFILE_KEYS = ["name", "phone", "email", "school", "birthday"] as const;
@@ -50,6 +50,31 @@ export async function POST(req: Request) {
   for (const k of PROFILE_KEYS) {
     const v = field(parsed.profile?.[k], text);
     if (v) profile[k] = v;
+  }
+
+  // 教育背景：学校必须能在原文中找到；原文行取模型给的行号（该行要包含学校名），否则用学校名所在的第一行
+  const education: ImportedEducation[] = [];
+  const eduSeen = new Set<string>();
+  for (const e of Array.isArray(parsed.education) ? parsed.education : []) {
+    if (!e || typeof e !== "object" || Array.isArray(e)) continue;
+    const r = e as Record<string, unknown>;
+    const school = field(r.school, text);
+    if (!school) continue;
+    const n = typeof r.line === "string" ? Number(r.line) : r.line;
+    const has = (l: string | undefined) => !!l && norm(l).includes(norm(school));
+    const line = Number.isInteger(n) && has(lines[(n as number) - 1]) ? lines[(n as number) - 1] : lines.find(has);
+    const item: ImportedEducation = {
+      school,
+      degree: field(r.degree, text),
+      major: field(r.major, text),
+      start: field(r.start, text),
+      end: field(r.end, text),
+      source: (line ?? school).trim(),
+    };
+    const key = `${norm(item.school)}|${norm(item.degree)}|${norm(item.start)}`;
+    if (eduSeen.has(key)) continue;
+    eduSeen.add(key);
+    education.push(item);
   }
 
   // 先整理各段经历的基本信息，用于识别标题行
@@ -155,7 +180,7 @@ export async function POST(req: Request) {
     same.facts = dedupe([...same.facts, ...exp.facts]);
   }
 
-  const body: ImportResponse = { experiences: merged, profile, rejected, unassigned };
+  const body: ImportResponse = { experiences: merged, education, profile, rejected, unassigned };
   return NextResponse.json(body);
 }
 

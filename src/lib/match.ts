@@ -1,4 +1,5 @@
-import type { Coverage, Experience, Requirement } from "./types";
+import type { Coverage, Education, Experience, Requirement } from "./types";
+import { checkEducation, isEducationRequirement } from "./education";
 import { TERM_RE } from "./validate";
 
 const COVERAGES: Coverage[] = ["full", "partial", "none"];
@@ -104,6 +105,10 @@ export function isPureYearsMissing(s: string, requirement = ""): boolean {
   return rest.replace(YEARS_FILLER_RE, "") === "";
 }
 
+/** 一条要求最多引用的事实条数；超过视为没有找到直接依据 */
+export const MAX_CITED = 5;
+export const BROAD_MISSING = "没有找到直接对应的经历（所引依据过于宽泛）";
+
 export const COMPOUND_MISSING = "该条包含多项要求，未能逐项确认";
 
 /**
@@ -128,7 +133,7 @@ export function isCompoundRequirement(text: string): boolean {
 export function checkRequirements(
   raw: unknown,
   experiences: Experience[],
-  opts: { legacy?: boolean; now?: Date } = {},
+  opts: { legacy?: boolean; now?: Date; education?: Education[] } = {},
 ): Requirement[] | null {
   if (!Array.isArray(raw)) return null;
   const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, { fact: f, exp: e }] as const)));
@@ -139,6 +144,11 @@ export function checkRequirements(
     const text = textOk ? (r.text as string).trim() : "（这条要求格式异常，按缺口处理）";
     const type = r.type === "nice" ? "nice" : "must";
     const gap: Requirement = { text, type, factIds: [], coverage: "none", missing: [] };
+
+    // 学历、专业类要求不看模型的结论，由程序按教育背景判断
+    if (textOk && isEducationRequirement(text)) {
+      return { text, type, factIds: [], ...checkEducation(text, opts.education ?? [], opts.now) };
+    }
 
     const rawIds = strings(r.factIds);
     const modelMissing = r.missing === undefined ? [] : strings(r.missing);
@@ -164,6 +174,12 @@ export function checkRequirements(
     const extra: string[] = [];
     // 模型自己列出了缺失点却又标 full，结论自相矛盾
     if (missing.length > 0) result = cap(result, "partial");
+
+    // 一条要求引用了一大片事实，说明模型没有找到直接对应的经历、只是把能看到的都列上了
+    if (factIds.length > MAX_CITED) {
+      result = cap(result, "partial");
+      extra.push(BROAD_MISSING);
+    }
 
     // 只认用户原话 source；text 是 AI 整理的表述，可能已含幻觉（与 /api/verify 一致）
     const evidence = cited.map(({ fact }) => fact.source).join(" ");
