@@ -17,9 +17,9 @@ export function sourceInUserText(source: string, userText: string) {
 
 /**
  * 校验亮点（规则部分）：必须引用本段经历下存在的事实；亮点里的每个数字和英文专有名词都要出现在所引事实（含原话）中；
- * 每个面试追问都要能基于原始描述给出可信回答。不通过的亮点被剔除并记录原因。
+ * 不通过的亮点被剔除并记录原因。
  * 技能、职责、效果等中文说法由 /api/verify 的大模型核验把关；/api/resume 只写亮点、不带问答，
- * 问答在核验通过后由 /api/qa 生成并经 applyQA 用同一套 checkAnswer / indefensibleReason 校验。
+ * 问答在核验通过后由 /api/qa 生成并经 applyQA 用同一套 checkAnswer 校验。
  */
 export function checkHighlights(raw: Highlight[], experiences: Experience[]) {
   const kept: Highlight[] = [];
@@ -54,12 +54,8 @@ export function checkHighlights(raw: Highlight[], experiences: Experience[]) {
       dropped.push({ text: h.text, reason: `「${unknownTerms.join("、")}」在你的原始描述中找不到`, experienceId: exp.id, factIds });
       continue;
     }
+    // 问答由 /api/qa 另行生成；这里若带了问答，同样逐条校验（答不上来的标 insufficient，不剔除亮点）
     const questions = (h.questions ?? []).map((qa) => checkAnswer(qa, exp.facts, facts));
-    const reason = indefensibleReason(questions);
-    if (reason) {
-      dropped.push({ text: h.text, reason, experienceId: exp.id, factIds });
-      continue;
-    }
     const sources = Object.fromEntries(facts.map((f) => [f.id, f.source]));
     kept.push({ ...h, experienceId: exp.id, factIds, questions, sources });
   }
@@ -141,7 +137,7 @@ export function failQA(items: Highlight[]): DroppedHighlight[] {
 /**
  * 给已核验的亮点挂上面试问答：raw 是模型返回的 questions，只经过 JSON 解析，没有结构保证。
  * 只采信 q、a 都是非空字符串的条目；一条有效问答都没有时按「没拿到问答」剔除。
- * 每个参考回答按 checkAnswer 校验，任一回答不可信的亮点按 indefensibleReason 剔除（GAPS#1）。
+ * 每个参考回答按 checkAnswer 校验：不可信的回答替换为补充提示、标 insufficient，亮点保留。
  */
 export function applyQA(h: Highlight, raw: unknown, experiences: Experience[]): { kept?: Highlight; dropped?: DroppedHighlight } {
   const base = { text: h.text, experienceId: h.experienceId, factIds: h.factIds };
@@ -156,13 +152,16 @@ export function applyQA(h: Highlight, raw: unknown, experiences: Experience[]): 
     const ids = Array.isArray(factIds) ? factIds.filter((id): id is string => typeof id === "string") : [];
     return [{ q: q.trim(), a, factIds: ids }];
   });
-  // 有任何格式异常的条目（可能正是答不上来的那题）或不足 2 组问答（PRD 要求 2-3 个追问）时一律剔除，不挑着放行
+  // 有任何格式异常的条目或不足 2 组问答（PRD 要求 2-3 个追问）时，视为没拿到问答，剔除
   if (parsed.length < 2 || parsed.length !== items.length) return { dropped: { ...base, reason: QA_MISSING } };
+  // 亮点本身已通过核验、出自原话，追问答不上来不再剔除亮点（产品决策）：答不上来的追问不展示编造的回答，
+  // 标为「需要你补充」；展示前 3 组（PRD「2-3 个追问」），答得上来的排在前面
   const questions = parsed.map((qa) => checkAnswer(qa, exp.facts, facts));
-  const reason = indefensibleReason(questions);
-  if (reason) return { dropped: { ...base, reason } };
-  // 先核验全部回答（多出来的题答不上来同样剔除），通过后只展示前 3 组，符合 PRD「2-3 个追问」
-  return { kept: { ...h, questions: questions.slice(0, 3) } };
+  const good = questions.filter((q) => !isInsufficient(q));
+  const weak = questions.filter(isInsufficient);
+  // 有需要补充的题时至少保留一道，不让它被截掉而看不到提示
+  const shown = weak.length > 0 ? [...good.slice(0, 2), ...weak].slice(0, 3) : good.slice(0, 3);
+  return { kept: { ...h, questions: shown } };
 }
 
 /**
@@ -194,23 +193,9 @@ export function isInsufficient(qa: QA): boolean {
   return qa.insufficient === true || (qa.a ?? "").trim().startsWith(INSUFFICIENT_PREFIX);
 }
 
-/** 任一追问答不上来（参考回答不可信）的亮点不能写进简历；返回剔除原因，全部可信时返回 null */
-export function indefensibleReason(questions: QA[]): string | null {
-  const bad = questions.filter(isInsufficient);
-  if (bad.length === 0) return null;
-  return bad.map((qa) => `面试追问「${qa.q}」无法基于你的原始描述给出可信回答`).join("；");
-}
-
-/** 旧版本存下的简历里，回答不可信的亮点仍在 highlights 中；读取时按同一规则移入 dropped */
-export function dropIndefensible(resume: ResumeResult): ResumeResult {
-  const highlights: Highlight[] = [];
-  const dropped: DroppedHighlight[] = [...(resume.dropped ?? [])];
-  for (const h of resume.highlights ?? []) {
-    const reason = indefensibleReason(h.questions ?? []);
-    if (reason) dropped.push({ text: h.text, reason, experienceId: h.experienceId, factIds: h.factIds });
-    else highlights.push(h);
-  }
-  return { ...resume, highlights, dropped };
+/** 亮点里需要用户补充的追问数 */
+export function needsInput(h: Highlight): number {
+  return (h.questions ?? []).filter(isInsufficient).length;
 }
 
 /**
