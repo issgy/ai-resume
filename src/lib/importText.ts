@@ -34,8 +34,11 @@ export function findSameExperience<T extends { company: string; title: string; s
   const candidates = existing.map((e, i) => ({ e, i })).filter(({ e }) => experienceKey(e) === experienceKey(imp));
   const byStart = candidates.find(({ e }) => e.start.trim() && imp.start.trim() && norm(e.start) === norm(imp.start));
   if (byStart) return byStart.i;
+  // 事实重合只用于至少一方缺开始时间的情况；双方开始时间都有且不同，就是两段任职
   const sources = new Set(imp.facts.map((f) => strip(f.source)));
-  const byFacts = candidates.find(({ e }) => e.facts.some((f) => sources.has(strip(f.source))));
+  const byFacts = candidates.find(
+    ({ e }) => (!e.start.trim() || !imp.start.trim()) && e.facts.some((f) => sources.has(strip(f.source))),
+  );
   return byFacts ? byFacts.i : -1;
 }
 

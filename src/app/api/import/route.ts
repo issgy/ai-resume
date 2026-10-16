@@ -52,13 +52,31 @@ export async function POST(req: Request) {
   if (result.looseLines.length > 0 && deadline - Date.now() >= RETRY_MIN_MS) {
     const hint = `\n\n注意：上次识别漏掉了第 ${result.looseLines.join("、")} 行所在的经历。请重新完整识别，每一段工作、实习、项目经历（包括项目经历板块下的每个项目）都要单独输出一项。`;
     try {
-      const again = assemble(await parseStructure(numberLines(lines) + hint, deadline, false), text, lines);
-      if (again.body.unassigned < result.body.unassigned) result = again;
+      const again = assemble(await parseStructure(numberLines(lines) + hint, deadline, hasExperienceSection(lines)), text, lines);
+      // 只有「未归类更少、事实没变少、第一次识别出的每条事实在重试结果里仍归在同名经历下」才采用重试结果
+      if (again.body.unassigned < result.body.unassigned && keepsAssignments(result.body, again.body)) result = again;
     } catch {
       // 重试失败就用第一次的结果
     }
   }
   return NextResponse.json(result.body);
+}
+
+/** 第一次已归到具体经历的每条事实，在重试结果里仍在同名经历下（不丢、不改归属） */
+function keepsAssignments(first: ImportResponse, again: ImportResponse): boolean {
+  const owner = (body: ImportResponse) => {
+    const m = new Map<string, string>();
+    for (const e of body.experiences) {
+      const key = experienceKey(e);
+      if (!key) continue; // 未归类
+      for (const f of e.facts) m.set(norm(f.source), key);
+    }
+    return m;
+  };
+  const before = owner(first);
+  const after = owner(again);
+  for (const [src, key] of before) if (after.get(src) !== key) return false;
+  return after.size >= before.size;
 }
 
 /** 由模型给出的结构组装导入结果；looseLines 是放入「未归类」的原文行号 */
@@ -238,6 +256,9 @@ function assemble(parsed: Parsed, text: string, lines: string[]): { body: Import
 const DATE_RANGE_RE =
   /(?:(?:19|20)\d{2}\s*[年./-]\s*\d{1,2}\s*月?|[A-Za-z]{3,9}\.?\s+(?:19|20)\d{2})\s*(?:[-–—~～至到]+|to)\s*(?:(?:19|20)\d{2}\s*[年./-]\s*\d{1,2}\s*月?|[A-Za-z]{3,9}\.?\s+(?:19|20)\d{2}|至今|今|现在|present|now)/i;
 
+/** 描述句常见的开头动词 */
+const HEADER_VERB_RE = /^(负责|参与|主导|完成|实现|设计|开发|搭建|推动|带领|协助|优化|维护|组织|策划|撰写|制定|跟进|对接|支持|周期)/;
+
 /**
  * 像一段经历的标题行：不是项目符号开头、不长、不以句末标点结尾，且起止时间在行首或行尾
  * （「字节跳动 | 工程师 | 2021.07-至今」「2021.07-2023.06 腾讯」）；时间写在句子中间的是描述，不算标题
@@ -249,7 +270,10 @@ function looksLikeHeader(line: string): boolean {
   if (!m) return false;
   const before = t.slice(0, m.index).trim();
   const after = t.slice(m.index! + m[0].length).trim();
-  return before === "" || after === "" || /^[|｜/·\-–—\s]*$/.test(after);
+  if (before === "") return true;
+  // 时间在行尾：前面必须像「公司 | 岗位」而不是一句描述（不含逗号句号、不以「负责、参与」等动词开头）
+  if (after !== "" && !/^[|｜/·\-–—\s]*$/.test(after)) return false;
+  return before.length <= 40 && !/[，,。；;：:]/.test(before) && !HEADER_VERB_RE.test(before);
 }
 
 /** 行号范围：[起, 止]（1 起、闭区间）；空数组表示没有描述（返回 null）；格式不对或越界返回 undefined */
