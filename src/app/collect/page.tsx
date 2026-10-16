@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button, Card, ErrorText, PageHeader, httpError, postJson } from "@/components/ui";
 import { Logo } from "@/components/logo";
+import { IMPORT_MAX, IMPORT_MIN } from "@/lib/importText";
+import { runImport, useJobs } from "@/lib/jobs";
 import { KEYS, uid, useStored } from "@/lib/storage";
 import type { ChatMessage, Experience } from "@/lib/types";
 
@@ -14,7 +17,107 @@ const GREETING: ChatMessage = {
 
 type Extracted = Omit<Experience, "id" | "facts"> & { facts: { text: string; source: string }[]; rejected: number };
 
+type Tab = "paste" | "chat";
+
 export default function CollectPage() {
+  const [tab, setTab] = useState<Tab>("paste");
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        step="01"
+        title="录入经历"
+        desc={
+          tab === "paste"
+            ? "把现有简历的文字粘贴进来，AI 按原文拆分成经历和事实，直接存入履历库。"
+            : "像聊天一样讲一段经历，AI 会追问细节和数字。回答两轮以上就可以整理入库。适合还没有简历的同学。"
+        }
+      />
+      <div role="tablist" className="inline-flex rounded-full border border-line bg-card p-1 text-sm">
+        {([
+          ["paste", "粘贴简历"],
+          ["chat", "对话录入"],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            role="tab"
+            aria-selected={tab === key}
+            onClick={() => setTab(key)}
+            className={`rounded-full px-4 py-1.5 transition ${tab === key ? "bg-brand text-white" : "text-ink-soft hover:bg-paper"}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {tab === "paste" ? <PasteImport /> : <ChatCollect />}
+    </div>
+  );
+}
+
+/** 离开页面再回来时保留粘贴框里的内容（不写 localStorage，不进备份） */
+let pasteDraft = "";
+
+function PasteImport() {
+  const jobs = useJobs();
+  const [text, setText] = useState(pasteDraft);
+  const count = text.trim().length;
+  const tooShort = count > 0 && count < IMPORT_MIN;
+  const tooLong = count > IMPORT_MAX;
+  const running = jobs.import !== null;
+  const s = jobs.importSummary;
+
+  return (
+    <div className="space-y-6">
+      <Card className="space-y-3">
+        <textarea
+          className="field min-h-[40vh] resize-y"
+          placeholder="把简历里的工作经历、实习经历、项目经历和个人信息粘贴到这里（纯文本即可，格式乱一点也没关系）"
+          value={text}
+          disabled={running}
+          onChange={(e) => {
+            pasteDraft = e.target.value;
+            setText(e.target.value);
+          }}
+        />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span className={`text-xs ${tooShort || tooLong ? "text-warn" : "text-muted"}`}>
+            {count} / {IMPORT_MAX} 字
+            {tooShort && `，内容太短（至少 ${IMPORT_MIN} 字）`}
+            {tooLong && "，超出上限，请删减后再导入"}
+          </span>
+          <Button variant="accent" onClick={() => runImport(text.trim())} disabled={running || count < IMPORT_MIN || tooLong}>
+            {running ? "解析中，可以先去做别的…" : "解析并存入履历库"}
+          </Button>
+        </div>
+        <p className="text-xs text-muted">文本会发送给大模型服务商用于解析，本站不在服务器保存</p>
+      </Card>
+
+      <ErrorText>{jobs.importError}</ErrorText>
+
+      {s && (
+        <Card className="animate-rise space-y-4">
+          <h2 className="text-lg font-semibold">导入完成</h2>
+          <ul className="space-y-1.5 text-sm">
+            <li>新增 {s.added} 段经历，合并到已有经历 {s.merged} 段，共写入 {s.facts} 条事实</li>
+            {s.duplicates > 0 && <li className="text-muted">{s.duplicates} 条与履历库中已有事实出自同一原文，已跳过</li>}
+            {s.rejected > 0 && <li className="text-warn">{s.rejected} 条因在原文中找不到依据被丢弃</li>}
+            <li>{s.profileFields.length > 0 ? `个人信息填充了：${s.profileFields.join("、")}` : "个人信息没有需要填充的字段（已填写的不会被覆盖）"}</li>
+            {s.unassigned > 0 && (
+              <li className="text-warn">
+                有 {s.unassigned} 行内容没能归到具体经历，已放入履历库的「未归类」，请到履历库核对并移到对应经历下
+              </li>
+            )}
+          </ul>
+          <div className="flex flex-wrap gap-2">
+            <Link href="/vault"><Button variant="accent">去履历库查看</Button></Link>
+            <Link href="/match"><Button variant="ghost">去 JD 匹配</Button></Link>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function ChatCollect() {
   const router = useRouter();
   const [messages, setMessages] = useStored<ChatMessage[]>(KEYS.chat, [GREETING]);
   const [, setExperiences] = useStored<Experience[]>(KEYS.experiences, []);
@@ -112,17 +215,6 @@ export default function CollectPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        step="01"
-        title="录入经历"
-        desc="像聊天一样讲一段经历，AI 会追问细节和数字。回答两轮以上就可以整理入库。"
-        actions={
-          <Button variant="ghost" onClick={() => { setMessages([GREETING]); setDraft(null); }} disabled={streaming}>
-            重新开始这段
-          </Button>
-        }
-      />
-
       <Card className="!p-0 overflow-hidden">
         <div className="flex items-center gap-3 border-b border-line px-5 py-3">
           <span className="grid h-9 w-9 place-items-center rounded-full bg-accent-soft"><Logo size={22} /></span>
@@ -130,6 +222,9 @@ export default function CollectPage() {
             <div className="text-sm font-semibold">简历顾问</div>
             <div className="text-xs text-muted">{streaming ? "正在输入…" : "在线"}</div>
           </div>
+          <Button variant="ghost" className="ml-auto" onClick={() => { setMessages([GREETING]); setDraft(null); }} disabled={streaming}>
+            重新开始这段
+          </Button>
         </div>
 
         <div className="h-[52vh] space-y-4 overflow-y-auto bg-paper/50 px-5 py-6">

@@ -1,11 +1,11 @@
 import type { Experience, Fact, Highlight, DroppedHighlight, QA, ResumeResult } from "./types";
 
-const NUM_RE = /\d+(?:\.\d+)?/g;
+export const NUM_RE = /\d+(?:\.\d+)?/g;
 /** 英文技术名、产品名、缩写（React、Redis、GMV 等），用来发现参考回答里凭空出现的专有名词 */
 export const TERM_RE =/[A-Za-z][A-Za-z0-9.+#-]*[A-Za-z0-9+#]/g;
 
 /** 归一化：去空白和常见标点，便于做"是否逐字出现"的比较 */
-function norm(s: string) {
+export function norm(s: string) {
   return s.replace(/[\s，。、,.;；:：！!？?“”"'‘’（）()]/g, "");
 }
 

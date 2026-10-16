@@ -114,6 +114,11 @@ export default function VaultPage() {
                         <span className="mr-1 rounded-full bg-accent-soft px-1.5 py-0.5 text-accent">手动补充</span>
                         以上文字即为来源
                       </>
+                    ) : f.origin === "imported" ? (
+                      <>
+                        <span className="mr-1 rounded-full bg-sky-50 px-1.5 py-0.5 text-sky-800">简历导入</span>
+                        原文：「{f.source}」
+                      </>
                     ) : (
                       <>原话：「{f.source}」</>
                     )}
