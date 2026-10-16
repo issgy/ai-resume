@@ -83,16 +83,25 @@ export async function POST(req: Request) {
     .filter((e) => e.range)
     .map((e) => e.range![0])
     .sort((a, b) => a - b);
+  // 延伸部分里出现「像经历标题」的行（非项目符号、含起止时间），说明模型可能漏识别了一段经历：
+  // 在这里停下，标题之后到原本延伸终点的内容放入「未归类」，不自动归给上一段经历
+  const orphans: [number, number][] = [];
   const extend = (range: [number, number]): [number, number] => {
     const next = starts.find((s) => s > range[0]);
-    let end = range[1];
-    if (next !== undefined) {
-      end = next - 1;
-    } else {
-      end = lines.length;
-    }
+    let end = next !== undefined ? next - 1 : lines.length;
     // 中途遇到板块标题（技能、教育经历等）就停
-    for (let i = range[0]; i <= end; i++) if (isSectionLabel(lines[i - 1])) return [range[0], Math.max(range[0], i - 1)];
+    for (let i = range[0]; i <= end; i++) {
+      if (isSectionLabel(lines[i - 1])) {
+        end = Math.max(range[0], i - 1);
+        break;
+      }
+    }
+    for (let i = range[1] + 1; i <= end; i++) {
+      if (looksLikeHeader(lines[i - 1])) {
+        orphans.push([i + 1, end]);
+        return [range[0], i - 1];
+      }
+    }
     return [range[0], Math.max(range[1], end)];
   };
 
@@ -119,10 +128,23 @@ export async function POST(req: Request) {
     }
   }
 
-  // 工作/实习/项目板块里带项目符号、却没被归到任何经历的行：放入「未归类」，提示用户到履历库核对。
-  // 教育、技能、证书等板块下的内容不属于经历，不计入
   const loose: ImportedExperience = { company: "", title: "", start: "", end: "", facts: [] };
   let unassigned = 0;
+  for (const [from, to] of orphans) {
+    const own: string[] = [];
+    for (let i = from; i <= to; i++) {
+      if (covered.has(i)) continue;
+      covered.add(i);
+      if (lines[i - 1].trim()) own.push(lines[i - 1]);
+    }
+    const facts = toFacts(own).filter((f) => f !== null);
+    if (facts.length === 0) continue;
+    unassigned += own.length;
+    loose.facts.push(...facts);
+  }
+
+  // 工作/实习/项目板块里带项目符号、却没被归到任何经历的行：放入「未归类」，提示用户到履历库核对。
+  // 教育、技能、证书等板块下的内容不属于经历，不计入
   // 有板块标题时，第一个标题之前（联系方式、求职意向、个人总结等）不算经历；整份没有板块标题时才全部扫描
   let inExperienceSection = !lines.some(isSectionLabel);
   lines.forEach((line, idx) => {
@@ -141,7 +163,8 @@ export async function POST(req: Request) {
   const merged: ImportedExperience[] = [];
   const byKey = new Map<string, ImportedExperience>();
   for (const exp of [...entries.map((e) => e.exp), loose]) {
-    const key = experienceKey(exp) || UNASSIGNED;
+    // 同公司同岗位、但起止时间不同的是两段任职，不合并
+    const key = experienceKey(exp) ? `${experienceKey(exp)}|${norm(exp.start)}` : UNASSIGNED;
     if (exp.facts.length === 0 && (key === UNASSIGNED || !exp.company)) continue;
     const same = byKey.get(key);
     if (!same) {
@@ -157,6 +180,16 @@ export async function POST(req: Request) {
 
   const body: ImportResponse = { experiences: merged, profile, rejected, unassigned };
   return NextResponse.json(body);
+}
+
+/** 起止时间：2021.07-2023.06、2026 年 6 月--至今、Jan 2022 – Present 等（年份后必须带月份，避免把「2022-2024 年规划」当成时间段） */
+const DATE_RANGE_RE =
+  /(?:(?:19|20)\d{2}\s*[年./-]\s*\d{1,2}\s*月?|[A-Za-z]{3,9}\.?\s+(?:19|20)\d{2})\s*(?:[-–—~～至到]+|to)\s*(?:(?:19|20)\d{2}\s*[年./-]\s*\d{1,2}\s*月?|[A-Za-z]{3,9}\.?\s+(?:19|20)\d{2}|至今|今|现在|present|now)/i;
+
+/** 像一段经历的标题行：不是项目符号开头、不长、含起止时间 */
+function looksLikeHeader(line: string): boolean {
+  const t = line.trim();
+  return t.length > 0 && t.length <= 80 && !BULLET_RE.test(t) && DATE_RANGE_RE.test(t);
 }
 
 /** 行号范围：[起, 止]（1 起、闭区间）；空数组表示没有描述（返回 null）；格式不对或越界返回 undefined */

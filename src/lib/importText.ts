@@ -18,6 +18,12 @@ export type ImportResponse = {
   unassigned: number;
 };
 
+/** 是否同一段经历：公司 + 岗位相同，且开始时间相同（任一方没写开始时间时按公司 + 岗位判断） */
+export function sameExperience(a: { company: string; title: string; start: string }, b: { company: string; title: string; start: string }) {
+  if (experienceKey(a) !== experienceKey(b)) return false;
+  return !a.start.trim() || !b.start.trim() || norm(a.start) === norm(b.start);
+}
+
 /** 同一段经历的判定键：company + title，忽略空白和大小写；两者都为空时返回空串（未归类） */
 export function experienceKey(e: { company: string; title: string }) {
   const c = e.company.replace(/\s/g, "").toLowerCase();

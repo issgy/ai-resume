@@ -3,7 +3,7 @@
 import { useSyncExternalStore } from "react";
 import { postJson } from "@/components/ui";
 import { KEYS, read, uid, writeStored } from "@/lib/storage";
-import { BULLET_RE, experienceKey } from "@/lib/importText";
+import { BULLET_RE, sameExperience } from "@/lib/importText";
 import type { ImportResponse } from "@/lib/importText";
 import type { Experience, Profile, Requirement, ResumeResult } from "@/lib/types";
 import { failQA, failVerification, norm } from "@/lib/validate";
@@ -136,6 +136,8 @@ export function attachResumeRedirect(fn: () => void) {
   };
 }
 
+const STORAGE_FAILED = "浏览器存储空间不足或被禁用，导入内容没有保存。请清理浏览器数据或关闭无痕模式后重试";
+
 const PROFILE_LABELS: Record<keyof Profile, string> = { name: "姓名", phone: "电话", email: "邮箱", school: "学校", birthday: "出生日期" };
 const EMPTY_PROFILE: Profile = { name: "", phone: "", email: "", school: "", birthday: "" };
 
@@ -150,9 +152,8 @@ function applyImport(data: ImportResponse): ImportSummary {
   let facts = 0;
   let duplicates = 0;
   for (const imp of data.experiences) {
-    const key = experienceKey(imp);
     // 没有公司和岗位的「未归类」内容也合并到已有的未归类经历，重复导入时不再多出一段
-    const idx = experiences.findIndex((e) => experienceKey(e) === key);
+    const idx = experiences.findIndex((e) => sameExperience(e, imp));
     const existing = idx >= 0 ? experiences[idx] : null;
     // 原文或整理后的文字任一相同都算重复（忽略行首项目符号），避免重复导入同一份简历时多出事实
     const strip = (s: string) => norm(s.replace(BULLET_RE, ""));
@@ -177,7 +178,8 @@ function applyImport(data: ImportResponse): ImportSummary {
       experiences.push({ id: uid(), company: imp.company, title: imp.title, start: imp.start, end: imp.end, facts: fresh });
     }
   }
-  writeStored(KEYS.experiences, experiences);
+  // 写不进浏览器存储（空间不足或被禁用）时不能提示导入成功
+  if (!writeStored(KEYS.experiences, experiences)) throw new Error(STORAGE_FAILED);
 
   const profile = { ...EMPTY_PROFILE, ...read<Partial<Profile>>(KEYS.profile, {}) };
   const profileFields: string[] = [];
@@ -188,7 +190,7 @@ function applyImport(data: ImportResponse): ImportSummary {
       profileFields.push(PROFILE_LABELS[k]);
     }
   }
-  if (profileFields.length > 0) writeStored(KEYS.profile, profile);
+  if (profileFields.length > 0 && !writeStored(KEYS.profile, profile)) throw new Error(STORAGE_FAILED);
 
   return { added, merged, facts, duplicates, rejected: data.rejected, profileFields, unassigned: data.unassigned };
 }
