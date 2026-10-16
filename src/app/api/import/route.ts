@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { callLLMJson } from "@/lib/llm";
 import { IMPORTER } from "@/lib/prompts";
 import { norm } from "@/lib/validate";
-import { BULLET_RE, IMPORT_MAX, IMPORT_MIN, experienceKey, isMetaLine, isSectionLabel, lineToFacts, literalSpan, numberLines } from "@/lib/importText";
+import { BULLET_RE, IMPORT_MAX, IMPORT_MIN, experienceKey, isMetaLine, isSectionLabel, linesToSentences, literalSpan, numberLines } from "@/lib/importText";
 import type { ImportResponse, ImportedExperience } from "@/lib/importText";
 import type { Profile } from "@/lib/types";
 
@@ -66,9 +66,19 @@ export async function POST(req: Request) {
     return [{ exp, range: toRange(r.factLines, lines.length) }];
   });
   const metas = entries.map(({ exp }) => [exp.company, exp.title, exp.start, exp.end]);
+  /**
+   * 描述行 → 事实：以句子为单位拼接（处理 PDF 折行、字间空格、小标题），
+   * 每条再回到原文核对：source 保存原文里对应的原样片段，text 只比它少了多余空白和「项目简介：」这类前缀。
+   * 原文中找不到的返回 null，计入 rejected。
+   */
+  const toFacts = (own: string[]) =>
+    linesToSentences(own, (l) => isMetaLine(l, metas)).map((t) => {
+      const source = literalSpan(t, text);
+      return source ? { text: t, source } : null;
+    });
 
   // 模型给的起始行号可靠，结束行号常常偏短（长简历尤其明显）。所以每段经历的描述从模型给的起始行开始，
-  // 一直延续到下一段经历开始前或下一个板块标题前；最后一段延续到空行或板块标题为止
+  // 一直延续到下一段经历开始前或下一个板块标题前。空行不作为结束：PDF 复制的文字常在句子中间夹空行
   const starts = entries
     .filter((e) => e.range)
     .map((e) => e.range![0])
@@ -79,17 +89,7 @@ export async function POST(req: Request) {
     if (next !== undefined) {
       end = next - 1;
     } else {
-      // 最后一段：往后延续，空行后紧跟带项目符号的行也继续算在这段里
-      for (let i = range[1] + 1; i <= lines.length; i++) {
-        const line = lines[i - 1];
-        if (isSectionLabel(line)) break;
-        if (!line.trim()) {
-          const following = lines.slice(i).find((l) => l.trim());
-          if (!following || !BULLET_RE.test(following)) break;
-          continue;
-        }
-        end = i;
-      }
+      end = lines.length;
     }
     // 中途遇到板块标题（技能、教育经历等）就停
     for (let i = range[0]; i <= end; i++) if (isSectionLabel(lines[i - 1])) return [range[0], Math.max(range[0], i - 1)];
@@ -106,25 +106,34 @@ export async function POST(req: Request) {
     }
     if (!entry.range) continue;
     const range = extend(entry.range);
+    const own: string[] = [];
     for (let i = range[0]; i <= range[1]; i++) {
       // 范围重叠时，一行只归给先出现的那段经历
       if (covered.has(i)) continue;
       covered.add(i);
-      const line = lines[i - 1];
-      if (!line.trim() || isMetaLine(line, metas)) continue;
-      for (const s of lineToFacts(line)) exp.facts.push({ text: s, source: s });
+      own.push(lines[i - 1]);
+    }
+    for (const fact of toFacts(own)) {
+      if (fact) exp.facts.push(fact);
+      else rejected++;
     }
   }
 
-  // 带项目符号却没被归到任何经历的行：放入「未归类」，提示用户到履历库核对
+  // 工作/实习/项目板块里带项目符号、却没被归到任何经历的行：放入「未归类」，提示用户到履历库核对。
+  // 教育、技能、证书等板块下的内容不属于经历，不计入
   const loose: ImportedExperience = { company: "", title: "", start: "", end: "", facts: [] };
   let unassigned = 0;
+  let inExperienceSection = true;
   lines.forEach((line, idx) => {
-    if (covered.has(idx + 1) || !BULLET_RE.test(line) || isMetaLine(line, metas)) return;
-    const facts = lineToFacts(line);
+    if (isSectionLabel(line)) {
+      inExperienceSection = EXPERIENCE_SECTION_RE.test(line);
+      return;
+    }
+    if (!inExperienceSection || covered.has(idx + 1) || !BULLET_RE.test(line) || isMetaLine(line, metas)) return;
+    const facts = toFacts([line]).filter((f) => f !== null);
     if (facts.length === 0) return;
     unassigned++;
-    for (const s of facts) loose.facts.push({ text: s, source: s });
+    loose.facts.push(...facts);
   });
 
   // 按 company + title 合并、事实去重
@@ -148,6 +157,9 @@ export async function POST(req: Request) {
   const body: ImportResponse = { experiences: merged, profile, rejected, unassigned };
   return NextResponse.json(body);
 }
+
+/** 工作、实习、项目类板块标题 */
+const EXPERIENCE_SECTION_RE = /工作|实习|实践|项目|experience|projects?/i;
 
 /** 行号范围：[起, 止]（1 起、闭区间）；空数组表示没有描述（返回 null）；格式不对或越界返回 undefined */
 function toRange(v: unknown, total: number): [number, number] | null | undefined {

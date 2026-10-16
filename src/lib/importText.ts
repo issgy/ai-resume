@@ -12,7 +12,7 @@ export type ImportedExperience = { company: string; title: string; start: string
 export type ImportResponse = {
   experiences: ImportedExperience[];
   profile: Partial<Profile>;
-  /** 模型给出的行号范围无效、无法定位到原文的经历段数 */
+  /** 行号范围无效的经历段数 + 在原文中找不到对应片段而丢弃的事实条数 */
   rejected: number;
   /** 带项目符号、看起来是经历描述，却没有被归到任何经历的行数；这些行已放入「未归类」 */
   unassigned: number;
@@ -29,7 +29,8 @@ export function experienceKey(e: { company: string; title: string }) {
  * 行首项目符号 / 序号。「-」「*」必须后跟空白，「1.」后面不能紧跟数字，
  * 以免把「-20%」「1.5 万用户」这类数字开头的内容误当成符号去掉。
  */
-export const BULLET_RE = /^\s*(?:[-–—*](?=\s)|[•·●○■□▪]|\d{1,2}[.、)）](?![\d.])|[（(]\d{1,2}[)）])\s*/;
+export const BULLET_RE =
+  /^\s*(?:[-–—*](?=\s)|[•·●○■□▪]|\d{1,2}[.．、)）](?![\d.．])|\d{1,2}[.．](?=(?:19|20)\d{2}\s*年)|[（(]\d{1,2}[)）])\s*/;
 
 /** 常见板块标题（整行只有它），不作为事实 */
 const SECTION_LABEL_RE =
@@ -45,17 +46,88 @@ export function numberLines(lines: string[]): string {
   return lines.map((l, i) => `[${i + 1}] ${l}`).join("\n");
 }
 
+const CJK = "\\u3400-\\u9fff\\uf900-\\ufaff\\u3000-\\u303f\\uff00-\\uffef";
+/** 两个中文字符（含中文标点）之间的空白：PDF 两端对齐复制出来的「基 于 LangGraph 编 排」 */
+const CJK_SPACE_RE = new RegExp(`(?<=[${CJK}])[ \\t\\u00a0\\u3000]+(?=[${CJK}])`, "g");
+/** 短于这个长度、且句末没有标点的行，视为独立的一条，而不是被折行的半句 */
+const SHORT_LINE = 20;
+/** 中文标点前后的空白（「、 SQL」「执行 ，」） */
+const CJK_PUNCT_SPACE_RE = /[ \t\u00a0\u3000]+(?=[，。、；：！？）」』])|(?<=[，。、；：！？（「『])[ \t\u00a0\u3000]+/g;
+/** 句子结束的标点：在这里断开成一条事实 */
+const SENTENCE_END_RE = /[。；;！!？?]/;
+/** 常见的小标题前缀，如「项目简介：」「主要工作：」，单独成行时跳过，和内容写在一行时去掉 */
+const LABEL_PREFIX_RE =
+  /^(项目(简介|描述|背景|介绍|成果|职责)|主要(工作|职责|贡献|成果)|工作(内容|职责|成果)|核心贡献|个人(职责|贡献)|职责(描述)?|技术栈)\s*[：:]\s*/;
+
+/** 整理一条事实的文字：只去掉多余空白（中文字之间的空格、换行），不改动任何字词 */
+export function tidy(s: string): string {
+  return s
+    .replace(/\s*\n\s*/g, "")
+    .replace(CJK_SPACE_RE, "")
+    .replace(CJK_PUNCT_SPACE_RE, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+/** 拼接两行：英文、数字直接相连时补一个空格，其余（中文折行）直接接上 */
+function joinLines(a: string, b: string): string {
+  if (!a) return b;
+  return /[A-Za-z0-9]$/.test(a) && /^[A-Za-z0-9]/.test(b) ? `${a} ${b}` : a + b;
+}
+
 /**
- * 把一行描述拆成若干条事实：去掉行首项目符号后按句号、分号切开。
- * 每条都是原文的连续片段，逐字保存，不做任何改写。
+ * 把一段经历的描述行整理成事实（以句子为单位，而不是以行为单位）：
+ * - PDF 复制会在句子中间折行、甚至夹空行，所以忽略换行和空行，把行拼回整句；
+ * - 遇到句号、分号等句末标点，或新的一行以项目符号/序号开头时，断开成一条；
+ * - 以冒号结尾的短行是小标题（「主要工作：」），跳过；「项目简介：…」这类前缀去掉；
+ * - 去掉中文字之间多余的空格。
+ * 返回整理后的文字；调用方再用 literalSpan 回到原文核对并保存原文片段。
  */
-export function lineToFacts(line: string): string[] {
-  if (SECTION_LABEL_RE.test(line)) return [];
-  return line
-    .replace(BULLET_RE, "")
-    .split(/(?<=[。；;！!？?])/)
-    .map((s) => s.trim())
-    .filter((s) => s.replace(/[\s\p{P}\p{S}]/gu, "").length >= 4);
+export function linesToSentences(lines: string[], skip: (line: string) => boolean = () => false): string[] {
+  const out: string[] = [];
+  let buf = "";
+  const emit = (s: string) => {
+    const t = tidy(s).replace(LABEL_PREFIX_RE, "").replace(/^[，,、\s]+/, "").trim();
+    if (t.replace(/[\s\p{P}\p{S}]/gu, "").length >= 4) out.push(t);
+  };
+  const flush = () => {
+    emit(buf);
+    buf = "";
+  };
+  /** 上一行（整理后）的长度和结尾；用来判断它是排版折行，还是一条独立的短句 */
+  let prevLen = 0;
+  let prevEnd = "";
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue; // 空行可能只是 PDF 折行，不当作句子结束
+    if (SECTION_LABEL_RE.test(line) || skip(raw)) {
+      flush();
+      continue;
+    }
+    const bullet = BULLET_RE.test(line);
+    let body = bullet ? line.replace(BULLET_RE, "") : line;
+    if (bullet) flush();
+    // 只有小标题的行：「主要工作：」「核心贡献：」
+    if (/[：:]$/.test(body) && tidy(body).length <= 12) {
+      flush();
+      continue;
+    }
+    body = tidy(body);
+    // 折行通常发生在排满的长行末尾；上一行很短、又不是以「，、」这类话没说完的标点结尾时，
+    // 它是一条独立的短句（如「负责商家后台前端开发」「带教实习生」），不和下一行拼在一起
+    if (buf && !bullet && prevLen < SHORT_LINE && !/[，,、：:（(]$/.test(prevEnd)) flush();
+    buf = joinLines(buf, body);
+    prevLen = body.length;
+    prevEnd = body.slice(-1);
+    // 句末标点处断开，剩下的半句留到下一行继续拼
+    let at: number;
+    while ((at = buf.search(SENTENCE_END_RE)) >= 0) {
+      emit(buf.slice(0, at + 1));
+      buf = buf.slice(at + 1);
+    }
+  }
+  flush();
+  return out;
 }
 
 /**
