@@ -48,7 +48,51 @@ export type ChatMessage = { role: "user" | "assistant"; content: string };
 /** full：所引事实完整覆盖；partial：只覆盖一部分；none：缺口 */
 export type Coverage = "full" | "partial" | "none";
 
+/** JD 要求类别（02 Requirement.category） */
+export type RequirementCategory = "hard_gate" | "core_responsibility" | "professional_ability" | "soft_ability" | "bonus";
+/** 要求级匹配状态（02 Match.status）：actual_gap 只用于程序能确定不满足的情况；材料没写是 unknown / needs_evidence */
+export type MatchStatus = "direct_support" | "transferable_support" | "expression_gap" | "needs_evidence" | "actual_gap" | "unknown";
+export type HardGateResult = "met" | "not_met" | "unknown" | "not_applicable";
+
+/** 一条支持证据（多对多边的一个子项）：可以引用多条事实，也可以引用能力推断 */
+export type Evidence = {
+  factIds: string[];
+  abilityIds: string[];
+  /** direct：行为直接支持；transferable：情境不同但方法可迁移 */
+  relation: "direct" | "transferable";
+  rationale: string;
+};
+
+/** 从行为推断的能力（02 AbilityEvidence）：推断与事实分开存；未经用户确认不作为事实导出（R09） */
+export type AbilityEvidence = {
+  id: string;
+  ability: string;
+  factIds: string[];
+  relation: "direct" | "transferable";
+  /** 为什么这些行为能支持这项能力 */
+  reasoning: string;
+  /** 推断的边界：不能据此推出什么 */
+  boundary: string;
+  missingDetails: string[];
+  /** 读取时按用户的确认记录合并；没有记录为 pending */
+  confirmation?: "pending" | "confirmed" | "rejected";
+};
+
 export type Requirement = {
+  /** 稳定 id（R1、R2…），旧数据没有 */
+  id?: string;
+  /** JD 原文片段 */
+  jdQuote?: string;
+  category?: RequirementCategory;
+  /** 要求里的逻辑：至少 / 优先 / 任一 / 全部 / 不要求 等 */
+  logic?: string;
+  ambiguity?: string;
+  status?: MatchStatus;
+  evidence?: Evidence[];
+  hardGate?: HardGateResult;
+  /** 模型最初的判断（状态与缺失点）：每次按当前证据重新推导时作参考 */
+  modelStatus?: MatchStatus;
+  modelMissing?: string[];
   text: string;
   type: "must" | "nice";
   factIds: string[];
@@ -117,7 +161,19 @@ export type DroppedHighlight = {
   factIds?: string[];
 };
 
-export type MatchResult = { jd: string; requirements: Requirement[] };
+export type MatchResult = {
+  jd: string;
+  requirements: Requirement[];
+  /** 2：多对多匹配格式（含 status/evidence/abilities）；旧数据没有 */
+  version?: 2;
+  abilities?: AbilityEvidence[];
+  /** 每段经历关联到了哪些要求，没关联的写明原因（防止静默漏失） */
+  experienceCoverage?: { experienceId: string; requirementIds: string[]; reason: string }[];
+  /** 最多五个最影响结果的补充问题 */
+  questions?: string[];
+  /** 分析时各事实的原话快照：事实之后被修改，引用它的证据失效待重新分析 */
+  factSources?: Record<string, string>;
+};
 
 export type ResumeResult = {
   jd: string;
@@ -132,4 +188,8 @@ export type ResumeResult = {
   failedExperienceIds?: string[];
   /** 生成时用到的匹配表（局部重试同一段经历时复用）；旧数据没有该字段 */
   requirements?: Requirement[];
+  /** 生成时的能力推断（含确认状态） */
+  abilities?: AbilityEvidence[];
+  /** 生成时的完整匹配结果：局部重试时按当前履历和确认记录重新推导撰写用匹配表 */
+  match?: MatchResult;
 };
