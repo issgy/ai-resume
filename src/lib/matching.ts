@@ -118,10 +118,8 @@ export function derive(r: Requirement, ctx: DeriveCtx): Requirement {
   const direct = evidence.filter((e) => e.relation === "direct" && e.abilityIds.every((id) => abilityById.get(id)!.relation === "direct"));
   // 门槛（硬性条件、年限）只能由事实或已确认的推断确定满足：证据里直接引用的事实算数，
   // 只靠未确认推断的证据不算；计入的事实 = 直接引用的事实 + 已确认推断的事实
-  const firm = direct.filter((e) => e.factIds.length > 0 || e.abilityIds.every((id) => abilityById.get(id)!.confirmation === "confirmed"));
-  const firmFacts = [
-    ...new Set(firm.flatMap((e) => [...e.factIds, ...e.abilityIds.filter((id) => abilityById.get(id)!.confirmation === "confirmed").flatMap((id) => abilityById.get(id)!.factIds)])),
-  ];
+  const firm = direct.filter((e) => e.abilityIds.every((id) => abilityById.get(id)!.confirmation === "confirmed"));
+  const firmFacts = factsOf(firm);
 
   // 状态：有直接证据 → 直接支持（模型判「表述不足」时保留）；只有可迁移证据 → 可迁移支持；没有证据 → 需补证据 / 未知
   const ms = r.modelStatus ?? r.status ?? "unknown";
@@ -163,9 +161,22 @@ export function derive(r: Requirement, ctx: DeriveCtx): Requirement {
       hardGate = "unknown";
       yMissing.push(`经历起止时间不完整，无法核实 ${minYears} 年年限`);
     } else if (have < minYears) {
-      hardGate = "not_met";
-      status = "actual_gap";
-      yMissing.push(`需要 ${minYears} 年以上，直接相关经历合计约 ${Math.round(have * 10) / 10} 年（重叠时间不重复计算）`);
+      // 只有当履历库里其余经历都已计入、或全部经历加起来也不够时，才能确定不满足；否则其余经历是否相关未知
+      // 有事实的经历模型已经看过（没列为直接证据就是判断为不相关或只可迁移）；只有还没有任何事实的经历，领域未知
+      const counted = new Set(exps.map((e) => e.id));
+      const rest = ctx.experiences.filter((e) => !counted.has(e.id) && e.facts.length === 0);
+      const allHave = experienceYears(ctx.experiences, ctx.now);
+      const determinable = rest.length === 0 || (allHave !== null && allHave < minYears);
+      const label = `需要 ${minYears} 年以上，直接相关经历合计约 ${Math.round(have * 10) / 10} 年（重叠时间不重复计算）`;
+      if (determinable) {
+        hardGate = "not_met";
+        status = "actual_gap";
+        yMissing.push(label);
+      } else {
+        hardGate = "unknown";
+        if (status === "direct_support") status = "needs_evidence";
+        yMissing.push(`${label}；其他经历是否相关暂不清楚，可以补充这些经历的具体内容`);
+      }
     } else {
       hardGate = "met";
     }
@@ -235,7 +246,20 @@ export function refreshMatch(match: MatchResult, decisions: AbilityDecisions, ex
 
 /** 句子里出现的具体证书/考试名称（「证书」「考试」这类泛称本身也算） */
 function certTokens(s: string): string[] {
-  return [...new Set((s.match(new RegExp(CERT_RE.source, "gi")) ?? []).map((t) => t.toLowerCase()))];
+  // 具体证书名（「法律职业资格证」「教师资格证」）整体核对，去掉「持有/具备」这类前缀；考试名称（六级、PMP）单独核对
+  const named = (s.match(/[\u4e00-\u9fa5A-Za-z0-9]{0,10}(?:资格证书|资格证|证书|执照)/g) ?? []).map((t) =>
+    t.replace(/^(?:未提供|未取得|未|缺少|缺乏|没有|无|提供|必须|需要|需|要求|持有|具备|拥有|取得|获得|相关|有|并|且|及|和|的)+/, ""),
+  );
+  const exams = s.match(/cet-?\d|雅思|ielts|托福|toefl|tem-?\d|四级|六级|专八|专四|pmp|cpa/gi) ?? [];
+  return [...new Set([...named, ...exams].map((t) => norm(t).toLowerCase()).filter(Boolean))];
+}
+
+/** 年限条件的方向：下限（以上/至少）、上限（以下/不超过）、区间；没有方向时为空 */
+function boundOf(t: string): string {
+  if (RANGE_UPPER_RE.test(t)) return "range";
+  if (UPPER_ONLY_RE.test(t)) return "upper";
+  if (/以上|至少|不少于|不低于|[+＋]/.test(t)) return "lower";
+  return "";
 }
 
 /** 原文摘录没对上时的兜底：年限数字、学历层次词确实出现在 JD 里，说明这条门槛不是模型自己加的 */
@@ -263,7 +287,8 @@ export function normalizeMatch(raw: unknown, jd: string, experiences: Experience
     const factIds = validFacts(r.fact_ids);
     const ability = str(r.ability);
     const reasoning = str(r.reasoning);
-    if (!ability || !reasoning || factIds.length === 0) return;
+    // 引用了不存在或不可用的事实 id：整条推断不成立（不能删掉坏 id 后沿用原推理）
+    if (!ability || !reasoning || factIds.length === 0 || factIds.length !== strs(r.fact_ids).length) return;
     let id = str(r.id) || `A${i + 1}`;
     if (abilityIds.has(id)) id = `${id}_${i + 1}`;
     abilityIds.add(id);
@@ -288,16 +313,21 @@ export function normalizeMatch(raw: unknown, jd: string, experiences: Experience
     // 证书/考试名称必须出现在对应原文（没有可定位原文时看整份 JD）里，否则是模型新增的条件
     const certScope = (located ? norm(quote) : jdNorm).toLowerCase();
     if (certTokens(text).some((t) => !certScope.includes(t))) return;
-    // 规范化后的年限、学历必须与原文一致；不一致时以 JD 原文为准
+    // 规范化后的年限、学历及其上下限逻辑必须与原文一致；不一致时以 JD 原文为准
     let normalized = text;
-    if (located && (requiredYears(text) !== null || isEducationRequirement(text)) && !gateInJd(text, norm(quote))) normalized = quote;
+    const gateLike = requiredYears(text) !== null || UPPER_ONLY_RE.test(text) || isEducationRequirement(text);
+    if (located && gateLike && (!gateInJd(text, norm(quote)) || boundOf(text) !== boundOf(quote))) normalized = quote;
+    // 原文写了「不要求/不限」的不是要求；写了「优先/加分」的不能当必需条件
+    if (located && /不要求|不限/.test(quote) && !/不限于/.test(quote)) return;
+    const optionalInJd = located && /优先|加分|更佳|为佳/.test(quote);
     let category = CATEGORIES.includes(r.category as RequirementCategory) ? (r.category as RequirementCategory) : "professional_ability";
     let ambiguity = str(r.ambiguity);
     if (!located && category === "hard_gate") {
       category = "professional_ability";
       ambiguity = [ambiguity, "没能在 JD 原文中定位这条硬性条件，不作为门槛"].filter(Boolean).join("；");
     }
-    const type = r.priority === "nice" || category === "bonus" ? "nice" : "must";
+    if (optionalInJd && category === "hard_gate") category = "bonus";
+    const type = r.priority === "nice" || category === "bonus" || optionalInJd ? "nice" : "must";
     reqs.push({ id, text: normalized, jdQuote: located ? quote : "", category, type, logic: str(r.logic), ambiguity, factIds: [] });
   });
   if (reqs.length === 0) return null;
@@ -314,27 +344,36 @@ export function normalizeMatch(raw: unknown, jd: string, experiences: Experience
     for (const ev of Array.isArray(r.evidence) ? r.evidence : []) {
       const e = obj(ev);
       if (!e) continue;
-      const factIds = validFacts(e.fact_ids);
-      const abIds = strs(e.ability_ids).filter((id) => abilityIds.has(id));
+      const rawFacts = strs(e.fact_ids);
+      const rawAbs = strs(e.ability_ids);
+      const factIds = validFacts(rawFacts);
+      const abIds = rawAbs.filter((id) => abilityIds.has(id));
       const rationale = str(e.rationale);
-      if ((factIds.length === 0 && abIds.length === 0) || !rationale) continue;
-      slot.evidence.push({ factIds, abilityIds: abIds, relation: e.relation === "transferable" ? "transferable" : "direct", rationale });
+      // 联合证据引用了未知或不可用的 id：整条拒绝
+      if ((factIds.length === 0 && abIds.length === 0) || !rationale || factIds.length !== new Set(rawFacts).size || abIds.length !== rawAbs.length) continue;
+      // 推断的事实都已在本条证据里直接列出时，它只是说明，不构成额外依赖（事实本身就是直接依据）
+      const own = new Set(factIds);
+      const deps = abIds.filter((id) => !abilities.find((a) => a.id === id)!.factIds.every((f) => own.has(f)));
+      slot.evidence.push({ factIds, abilityIds: deps, relation: e.relation === "transferable" ? "transferable" : "direct", rationale });
     }
     for (const s of strs(r.missing)) if (!slot.missing.includes(s)) slot.missing.push(s);
     merged.set(rid, slot);
   }
 
   // 区间被拆开时，只把与某条「区间上限」数字相同的上限条件并回去；独立的上限条件保留
-  // 只有来自同一原文条件（摘录相互包含，或上限条没有摘录）且上限数字相同时才视为同一区间
+  // 只有上限数字相同、且条件对象一致（「工作经验」⊂「采购相关工作经验」）时才视为同一区间被拆开；
+  // 「管理经验不超过 5 年」这类对象不同的独立条件保留
+  const subject = (t: string) =>
+    norm(t).replace(/\d+|[—\-–~～至到+＋]|年|以上|以下|以内|之内|不超过|不多于|最多|至多|至少|及|或|具备|拥有|具有|需要|要求|有/g, "");
   const ranges = reqs.flatMap((r) => {
-    const n = [r.text, r.jdQuote ?? ""].map((t) => t.match(RANGE_UPPER_RE)?.[1]).find(Boolean);
-    return n ? [{ n, quote: norm(r.jdQuote ?? "") }] : [];
+    const n = r.text.match(RANGE_UPPER_RE)?.[1];
+    return n ? [{ n, subject: subject(r.text) }] : [];
   });
   const kept = reqs.filter((r) => {
     if (requiredYears(r.text) !== null || !UPPER_ONLY_RE.test(r.text)) return true;
     const n = r.text.match(/(\d+)\s*年/)?.[1];
-    const q = norm(r.jdQuote ?? "");
-    return !ranges.some((g) => g.n === n && (!q || (g.quote && (g.quote.includes(q) || q.includes(g.quote)))));
+    const sub = subject(r.text);
+    return !ranges.some((g) => g.n === n && g.subject.includes(sub));
   });
 
   const withModel: Requirement[] = kept.map((r) => {
