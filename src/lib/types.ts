@@ -67,9 +67,24 @@ export type QA = {
   a: string;
   /** 参考回答依据的事实 id */
   factIds?: string[];
-  /** 参考回答没通过校验、已替换为补充提示 */
+  /** 参考回答没通过校验、已替换为补充提示（与 preparationStatus = needs_details 同义，旧数据只有该字段） */
   insufficient?: boolean;
+  /** 面试准备状态：ready 参考回答只用了来源事实；needs_details 来源不足，需要用户补充（不影响亮点和事实） */
+  preparationStatus?: "ready" | "needs_details";
+  /** 回答这道题还缺的具体细节 */
+  missingDetails?: string[];
 };
+
+/**
+ * 简历句的导出状态（02 ResumeBullet.export_status）：
+ * ready 可导出；pending 待处理（模型调用失败、来源已修改待重验），不导出、可重试；blocked 来源冲突或引用的不是候选人行为，不导出
+ */
+export type ExportStatus = "ready" | "pending" | "blocked";
+/** 02 / 03-M5 issue_type；stale 表示来源事实在生成后被修改或删除 */
+export type IssueType = "unsupported_assertion" | "source_conflict" | "pending_inference" | "technical_error" | "stale";
+
+/** 句中一个断言的核验结果（行动、数字、范围、角色、结果、因果、工具） */
+export type AssertionCheck = { claim: string; type: string; supported: boolean; conflict?: boolean; reason?: string };
 
 export type Highlight = {
   experienceId: string;
@@ -78,6 +93,16 @@ export type Highlight = {
   questions: QA[];
   /** 生成并核验时所引事实的原话快照（事实 id → 原话）；之后事实被改或删，亮点即失效。旧数据没有该字段 */
   sources?: Record<string, string>;
+  /** 旧数据没有该字段：经过核验流程（provenanceChecked）的旧亮点按 ready 处理 */
+  exportStatus?: ExportStatus;
+  issueType?: IssueType | null;
+  /** 给用户看的处理说明（为什么待处理、删去了哪些说法、是否已退回原话） */
+  note?: string;
+  /** 核验时被缩小或退回原话前的候选句 */
+  originalText?: string;
+  assertionChecks?: AssertionCheck[];
+  /** 面试追问生成失败（不影响亮点导出，可重试） */
+  qaFailed?: boolean;
 };
 
 export type DroppedHighlight = {
@@ -101,4 +126,6 @@ export type ResumeResult = {
   provenanceChecked?: boolean;
   /** 撰写请求失败或没返回亮点的经历 id；旧数据没有该字段 */
   failedExperienceIds?: string[];
+  /** 生成时用到的匹配表（局部重试同一段经历时复用）；旧数据没有该字段 */
+  requirements?: Requirement[];
 };

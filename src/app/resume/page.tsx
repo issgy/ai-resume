@@ -5,8 +5,9 @@ import Link from "next/link";
 import { Button, Card, ErrorText, PageHeader } from "@/components/ui";
 import { isInAppBrowser, renderResume, saveFile, toPdf } from "@/lib/exportPdf";
 import { KEYS, useStored } from "@/lib/storage";
-import type { Experience, Profile, ResumeResult } from "@/lib/types";
-import { QA_FAILED, QA_MISSING, VERIFY_FAILED, VERIFY_MISSING, dropStale, isInsufficient, needsInput } from "@/lib/validate";
+import type { Experience, Highlight, Profile, ResumeResult } from "@/lib/types";
+import { isExportable, isInsufficient, markStale, needsInput } from "@/lib/validate";
+import { experienceLabel, retryExperience, useJobs } from "@/lib/jobs";
 
 const EMPTY_PROFILE: Profile = { name: "", phone: "", email: "", school: "", birthday: "" };
 const FIELDS: [keyof Profile, string][] = [
@@ -21,7 +22,8 @@ export default function ResumePage() {
   const [experiences, , loaded] = useStored<Experience[]>(KEYS.experiences, []);
   const [profile, setProfile] = useStored<Profile>(KEYS.profile, EMPTY_PROFILE);
   const [stored] = useStored<ResumeResult | null>(KEYS.resume, null);
-  const resume = stored && dropStale(stored, experiences);
+  const resume = stored && markStale(stored, experiences);
+  const jobs = useJobs();
   // 内容核验上线前生成的简历没有经过核验，只能查看，不能导出
   const exportable = !!resume?.provenanceChecked;
   const articleRef = useRef<HTMLElement>(null);
@@ -59,31 +61,40 @@ export default function ResumePage() {
   }
 
   const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, f] as const)));
-  const verifyFailed = resume.dropped.some((d) => d.reason === VERIFY_FAILED || d.reason === VERIFY_MISSING);
-  const qaFailed = resume.dropped.some((d) => d.reason === QA_FAILED || d.reason === QA_MISSING);
   const sourceLabel = (id: string) => {
     const origin = factById.get(id)?.origin;
-    return origin === "edited" ? "你在履历库手动修改为" : origin === "manual" ? "你手动补充" : "你说过";
+    return origin === "edited" ? "你在履历库手动修改为" : origin === "manual" ? "你手动补充" : origin === "imported" ? "简历原文" : "你说过";
   };
   const failedIds = new Set(resume.failedExperienceIds ?? []);
   const sections = experiences
     .filter((e) => e.facts.length > 0)
     .map((e) => {
-      const dropped = resume.dropped.filter((d) => d.experienceId === e.id);
-      const droppedFactIds = new Set(dropped.flatMap((d) => d.factIds ?? []));
+      const all = resume.highlights.filter((h) => h.experienceId === e.id);
       return {
         exp: e,
-        items: resume.highlights.filter((h) => h.experienceId === e.id),
+        items: all.filter((h) => isExportable(h, resume)),
+        waiting: all.filter((h) => !isExportable(h, resume)),
         failed: failedIds.has(e.id),
-        hasDropped: dropped.length > 0,
-        fallbackFacts: e.facts.filter((f) => !droppedFactIds.has(f.id)),
+        generated: all.length > 0,
       };
     });
-  // 宁缺勿滥：简历正文（屏幕、打印、PDF、长图）只放核验通过的亮点；
-  // 没有亮点的经历不写入简历，其履历事实只在正文之外列出供用户查看
+  // 简历正文（屏幕、打印、PDF、长图）只放 ready 的句子；待处理、生成失败、本次未生成的经历在正文之外列出，履历事实都不删除
   const verifiedSections = sections.filter((s) => s.items.length > 0);
-  const unverifiedSections = sections.filter((s) => s.items.length === 0);
-  const failedSections = unverifiedSections.filter((s) => s.failed);
+  const waiting = sections.filter((s) => s.waiting.length > 0 || s.failed);
+  const notGenerated = sections.filter((s) => !s.generated && !s.failed);
+  const retryButton = (expId: string, label = "重试这段") => (
+    <Button variant="ghost" className="!px-3 !py-1 text-xs" onClick={() => retryExperience(expId)} disabled={!!jobs.retrying || !!jobs.resume}>
+      {jobs.retrying === expId ? "重试中…" : label}
+    </Button>
+  );
+  const statusText = (h: Highlight) =>
+    h.issueType === "technical_error"
+      ? "模型请求出错（不是你的经历有问题）"
+      : h.issueType === "stale"
+        ? "来源已修改，待重新核验"
+        : h.issueType === "source_conflict"
+          ? "与原话矛盾"
+          : "无法导出";
 
   return (
     <div className="space-y-6">
@@ -118,22 +129,12 @@ export default function ResumePage() {
             请<Link href="/match" className="underline">重新生成</Link>后再下载 PDF。
           </p>
         )}
-        {exportable && verifyFailed && (
+        {waiting.length > 0 && (
           <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            内容核验服务出错或超时，未能确认的亮点已剔除（见页面底部）。请稍后<Link href="/match" className="underline">重新生成</Link>。
+            有 {waiting.length} 段经历存在待处理内容（模型出错、来源已修改或与原话矛盾），不会导出，详见页面下方，可以逐段重试。
           </p>
         )}
-        {exportable && qaFailed && (
-          <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            面试追问生成出错或超时，没拿到问答的亮点已剔除（见页面底部）。请稍后<Link href="/match" className="underline">重新生成</Link>。
-          </p>
-        )}
-        {failedSections.length > 0 && (
-          <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            以下经历的亮点生成失败，未写入简历：{failedSections.map((s) => `${s.exp.company} · ${s.exp.title}`).join("、")}。
-            可能是模型请求出错或超时，请<Link href="/match" className="underline">重新生成</Link>。
-          </p>
-        )}
+        <ErrorText>{jobs.retryError}</ErrorText>
         <ErrorText>{exportError}</ErrorText>
       </Card>
 
@@ -162,13 +163,13 @@ export default function ResumePage() {
         <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">工作经历</h2>
         {verifiedSections.length === 0 && (
           <p className="no-print rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            暂无通过核验的亮点可写入简历，请<Link href="/match" className="underline">重新生成</Link>。
+            暂无可导出的简历句，请查看下方待处理内容，或<Link href="/match" className="underline">重新生成</Link>。
           </p>
         )}
         {verifiedSections.map(({ exp, items }) => (
           <section key={exp.id} className="mb-4 break-inside-avoid">
             <div className="flex justify-between text-sm font-semibold">
-              <span>{exp.company} · {exp.title}</span>
+              <span>{experienceLabel(exp)}</span>
               <span className="font-normal text-slate-500">{[exp.start, exp.end].filter(Boolean).join(" – ")}</span>
             </div>
             <ul className="mt-1 space-y-1">
@@ -190,20 +191,31 @@ export default function ResumePage() {
                         {h.factIds.map((id) => (
                           <div key={id} className="text-slate-500">{sourceLabel(id)}：「{h.sources?.[id] ?? factById.get(id)?.source}」</div>
                         ))}
+                        {h.note && <div className="mt-1 text-amber-800">核验：{h.note}</div>}
+                        {h.originalText && <div className="text-slate-400">AI 初稿：{h.originalText}</div>}
                       </div>
                       <div>
-                        <div className="font-semibold text-slate-600">面试可能追问</div>
+                        <div className="font-semibold text-slate-600">面试准备</div>
+                        {h.qaFailed && (
+                          <div className="mt-1 flex items-center gap-2 text-amber-800">
+                            面试追问生成出错（不影响这句简历）。{retryButton(h.experienceId, "重试这段")}
+                          </div>
+                        )}
                         {h.questions.map((q, j) => (
                           <div key={j} className="mt-1">
                             <div>Q：{q.q}</div>
                             {isInsufficient(q) ? (
                               <div className="text-amber-800">
                                 <span className="mr-1 rounded-full bg-amber-100 px-1.5 py-0.5">需要你补充</span>
-                                你的原始描述里没有这道题的答案，AI 不代答。面试前请结合真实经历准备；也可以
+                                {q.missingDetails?.length ? `待补：${q.missingDetails.join("；")}。` : "你的原始描述里没有这道题的答案。"}
+                                AI 不代答；可以
                                 <Link href="/vault" className="underline underline-offset-2">到履历库补充细节</Link>，下次生成会用上。
                               </div>
                             ) : (
-                              <div className="text-slate-500">A：{q.a}</div>
+                              <>
+                                <div className="text-slate-500">A：{q.a}</div>
+                                {!!q.missingDetails?.length && <div className="text-amber-700">还可补充：{q.missingDetails.join("；")}</div>}
+                              </>
                             )}
                           </div>
                         ))}
@@ -217,42 +229,63 @@ export default function ResumePage() {
         ))}
       </article>
 
-      {/* 正文之外：没有核验通过亮点的经历，只供查看，不进入简历 */}
-      {unverifiedSections.map(({ exp, failed, hasDropped, fallbackFacts }) => (
-        <section key={exp.id} className="no-print space-y-2 rounded-3xl border border-amber-200 bg-amber-50/70 p-5 text-sm">
-          <div className="flex justify-between font-semibold text-amber-900">
-            <span>{exp.company} · {exp.title}</span>
-            <span className="font-normal text-amber-700">{[exp.start, exp.end].filter(Boolean).join(" – ")}</span>
-          </div>
-          <p className="text-xs text-amber-800">
-            {failed
-              ? "这段经历的亮点生成失败（模型请求出错、超时或没有返回内容）。"
-              : hasDropped
-                ? "这段经历的亮点都未通过校验（原因见页面底部）。"
-                : "这段经历没有生成定向亮点（可能是生成简历后才录入的）。"}
-            <Link href="/match" className="underline">重新生成</Link>可获得针对 JD 的亮点。
-          </p>
-          {fallbackFacts.length > 0 && (
-            <>
-              <p className="text-xs font-semibold text-amber-900">以下内容未经核验，未写入简历：</p>
-              <ul className="space-y-1">
-                {fallbackFacts.map((f) => (
-                  <li key={f.id} className="text-slate-700 before:mr-1 before:content-['•']">{f.text}</li>
+      {/* 正文之外：待处理（不导出、可重试） */}
+      {waiting.length > 0 && (
+        <div className="no-print space-y-4 rounded-3xl border border-amber-200 bg-amber-50/70 p-5 text-sm">
+          <h2 className="font-semibold text-amber-900">待处理（不会导出）</h2>
+          {waiting.map(({ exp, waiting: items, failed }) => (
+            <section key={exp.id} className="space-y-2">
+              <div className="flex items-center justify-between gap-2 font-medium text-amber-900">
+                <span>{experienceLabel(exp)}</span>
+                {retryButton(exp.id)}
+              </div>
+              {failed && <p className="text-xs text-amber-800">这段经历的简历句生成失败：模型请求出错或超时（不是你的经历有问题）。</p>}
+              <ul className="space-y-1.5">
+                {items.map((h, i) => (
+                  <li key={i} className="text-slate-700">
+                    <span className="mr-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-800">{statusText(h)}</span>
+                    {h.text}
+                    {h.note && <div className="text-xs text-amber-700">{h.note}</div>}
+                    {h.issueType === "source_conflict" && (
+                      <Link href="/vault" className="text-xs underline">去履历库核对来源</Link>
+                    )}
+                  </li>
                 ))}
               </ul>
-            </>
-          )}
-        </section>
-      ))}
+            </section>
+          ))}
+        </div>
+      )}
+
+      {/* 本次没有生成简历句的经历：事实仍在履历库，可单独生成 */}
+      {notGenerated.length > 0 && (
+        <div className="no-print space-y-3 rounded-3xl border border-line bg-card p-5 text-sm">
+          <h2 className="font-semibold">本次没有写入简历的经历</h2>
+          <p className="text-xs text-muted">这些经历的事实都还在履历库里，不是没通过核验；可能是生成简历之后才录入的。</p>
+          {notGenerated.map(({ exp }) => (
+            <section key={exp.id} className="space-y-1">
+              <div className="flex items-center justify-between gap-2 font-medium">
+                <span>{experienceLabel(exp)}</span>
+                {retryButton(exp.id, "为这段生成")}
+              </div>
+              <ul className="space-y-1">
+                {exp.facts.map((f) => (
+                  <li key={f.id} className="text-slate-600 before:mr-1 before:content-['•']">{f.text}</li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </div>
+      )}
 
       {resume.dropped.length > 0 && (
-        <div className="no-print rounded-3xl border border-amber-200 bg-amber-50/70 p-5 text-sm">
-          <h2 className="mb-3 font-semibold text-amber-900">以下亮点未写入简历</h2>
+        <div className="no-print rounded-3xl border border-line bg-card p-5 text-sm">
+          <h2 className="mb-2 font-semibold">{resume.highlights.some((h) => h.exportStatus) ? "模型输出中无效的句子（不影响履历事实）" : "以下亮点未写入简历"}</h2>
           <ul className="space-y-2">
             {resume.dropped.map((d, i) => (
               <li key={i}>
                 <span className="text-slate-700">{d.text}</span>
-                <span className="ml-2 text-amber-700">原因：{d.reason}</span>
+                <span className="ml-2 text-muted">原因：{d.reason}</span>
               </li>
             ))}
           </ul>

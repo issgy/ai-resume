@@ -1,7 +1,7 @@
-import type { Experience, Fact, Highlight, DroppedHighlight, QA, ResumeResult } from "./types";
+import type { AssertionCheck, Experience, Fact, Highlight, DroppedHighlight, QA, ResumeResult } from "./types";
 
 export const NUM_RE = /\d+(?:\.\d+)?/g;
-/** 英文技术名、产品名、缩写（React、Redis、GMV 等），用来发现参考回答里凭空出现的专有名词 */
+/** 英文技术名、产品名、缩写（React、Redis、GMV 等），用来发现凭空出现的专有名词 */
 export const TERM_RE =/[A-Za-z][A-Za-z0-9.+#-]*[A-Za-z0-9+#]/g;
 
 /** 归一化：去空白和常见标点，便于做"是否逐字出现"的比较 */
@@ -16,10 +16,51 @@ export function sourceInUserText(source: string, userText: string) {
 }
 
 /**
- * 校验亮点（规则部分）：必须引用本段经历下存在的事实；亮点里的每个数字和英文专有名词都要出现在所引事实（含原话）中；
- * 不通过的亮点被剔除并记录原因。
- * 技能、职责、效果等中文说法由 /api/verify 的大模型核验把关；/api/resume 只写亮点、不带问答，
- * 问答在核验通过后由 /api/qa 生成并经 applyQA 用同一套 checkAnswer 校验。
+ * 资料里的操作指令或备注（R14 / T16）：不是候选人的行为，不作为成果写进简历，也不作为退回的原话。
+ * 只识别明显的指令句式；拿不准的交给核验模型（提示词同样要求）。
+ */
+const INSTRUCTION_RE =
+  /(忽略|无视|不要管)(之前|以上|前面|上述|所有|全部)?的?(规则|指令|要求|设定|提示)|ignore\s+(all\s+|the\s+)?(previous|above|prior)\s+(instructions|rules)|(帮我|给我|请)(编造|虚构|捏造)|是资料中的指令/i;
+
+export function isInstructionFact(f: Pick<Fact, "source">): boolean {
+  return INSTRUCTION_RE.test(f.source);
+}
+
+/** 句子里出现、但所引事实（text + 原话）里没有的数字和英文专有名词 */
+export function ruleIssues(text: string, facts: Pick<Fact, "text" | "source">[]): string[] {
+  const evidence = facts.map((f) => `${f.text} ${f.source}`).join(" ");
+  const nums = new Set(evidence.match(NUM_RE) ?? []);
+  const terms = new Set((evidence.match(TERM_RE) ?? []).map((t) => t.toLowerCase()));
+  return [
+    ...new Set([
+      ...(text.match(NUM_RE) ?? []).filter((n) => !nums.has(n)),
+      ...(text.match(TERM_RE) ?? []).filter((t) => !terms.has(t.toLowerCase())),
+    ]),
+  ];
+}
+
+/**
+ * 退回原话（02 S6「退回已支持的具体行动」）：把所引事实的原话整理成一条简历句。
+ * 只去掉行首项目符号、句首人称「我」和句末标点，不增删任何内容；指令或备注不参与。没有可用原话时返回空串
+ */
+export function fallbackText(facts: Pick<Fact, "source">[]): string {
+  return facts
+    .filter((f) => !isInstructionFact(f))
+    .map((f) =>
+      f.source
+        .trim()
+        .replace(/^\s*(?:[-–—*•·●]\s*|\d{1,2}[.．、)）]\s*)/, "")
+        .replace(/(^|[，,；;。])\s*我(?=[\u4e00-\u9fa5])/g, "$1")
+        .replace(/[。；;，,\s]+$/, ""),
+    )
+    .filter(Boolean)
+    .join("；");
+}
+
+/**
+ * 校验模型写出的简历句（规则部分，只处理结构）：必须属于某段经历、必须引用这段经历下存在的事实。
+ * 数字、英文名词、拔高等内容问题不在这里删除——交给 /api/verify 逐句核验后缩小或退回原话（02 S6、R07）。
+ * 只引用了资料指令/备注的句子标 blocked，不导出。
  */
 export function checkHighlights(raw: Highlight[], experiences: Experience[]) {
   const kept: Highlight[] = [];
@@ -31,166 +72,141 @@ export function checkHighlights(raw: Highlight[], experiences: Experience[]) {
       experiences.find((e) => e.id === h.experienceId) ??
       experiences.find((e) => e.facts.some((f) => (h.factIds ?? []).includes(f.id)));
     if (!exp) {
-      dropped.push({ text: h.text, reason: "未关联到任何经历" });
+      dropped.push({ text: h.text, reason: "模型给出的句子没有对应任何经历（不影响履历库里的事实）" });
       continue;
     }
     const facts = exp.facts.filter((f) => (h.factIds ?? []).includes(f.id));
     if (facts.length === 0) {
-      dropped.push({ text: h.text, reason: "没有引用任何事实，无法溯源", experienceId: exp.id, factIds: [] });
+      dropped.push({ text: h.text, reason: "模型给出的句子没有引用任何事实，无法溯源（不影响履历库里的事实）", experienceId: exp.id, factIds: [] });
       continue;
     }
-    const evidence = facts.map((f) => `${f.text} ${f.source}`).join(" ");
-    const evidenceNums = new Set(evidence.match(NUM_RE) ?? []);
-    const unknown = (h.text.match(NUM_RE) ?? []).filter((n) => !evidenceNums.has(n));
     const factIds = facts.map((f) => f.id);
-    if (unknown.length > 0) {
-      dropped.push({ text: h.text, reason: `数字 ${unknown.join("、")} 在你的原始描述中找不到`, experienceId: exp.id, factIds });
-      continue;
-    }
-    // 英文技术名、工具名、缩写同样不能凭空出现（如事实没提 SQL，亮点就不能写 SQL）
-    const evidenceTerms = new Set((evidence.match(TERM_RE) ?? []).map((t) => t.toLowerCase()));
-    const unknownTerms = [...new Set((h.text.match(TERM_RE) ?? []).filter((t) => !evidenceTerms.has(t.toLowerCase())))];
-    if (unknownTerms.length > 0) {
-      dropped.push({ text: h.text, reason: `「${unknownTerms.join("、")}」在你的原始描述中找不到`, experienceId: exp.id, factIds });
-      continue;
-    }
-    // 问答由 /api/qa 另行生成；这里若带了问答，同样逐条校验（答不上来的标 insufficient，不剔除亮点）
-    const questions = (h.questions ?? []).map((qa) => checkAnswer(qa, exp.facts, facts));
     const sources = Object.fromEntries(facts.map((f) => [f.id, f.source]));
-    kept.push({ ...h, experienceId: exp.id, factIds, questions, sources });
+    const base: Highlight = { ...h, experienceId: exp.id, factIds, questions: [], sources };
+    if (facts.every(isInstructionFact)) {
+      kept.push({ ...base, exportStatus: "blocked", issueType: "unsupported_assertion", note: "这句引用的是资料里的指令或备注，不是你的经历，不会写进简历" });
+      continue;
+    }
+    kept.push(base);
   }
   return { kept, dropped };
 }
 
-export const VERIFY_FAILED = "内容核验服务出错或超时，未能确认这条亮点有据可查，请稍后重新生成";
-export const VERIFY_MISSING = "内容核验没有返回这条亮点的结论，请重新生成";
+export type VerifyVerdict = {
+  checks: AssertionCheck[];
+  revised: string;
+  issue: "unsupported_assertion" | "source_conflict" | null;
+};
 
 /**
- * 大模型返回的 results 只经过 JSON 解析，没有任何结构保证，这里严格校验后才采信：
- * results 不是数组，或任一条目不是对象、index 不是 [0, count) 内的整数、index 重复，
- * 说明结论与亮点的对应关系不可信，返回 null，整批按核验失败处理。
+ * 大模型返回的 results 只经过 JSON 解析，这里严格校验后才采信。
+ * results 不是数组，或条目不是对象、index 越界或重复，说明结论与句子的对应关系不可信，返回 null（整批按技术错误处理）。
+ * 单条结论格式不对时该条不放进结果（调用方按技术错误处理该条）。
  */
-function indexVerifyResults(results: unknown, count: number): Map<number, unknown> | null {
+export function parseVerifyResults(results: unknown, count: number): Map<number, VerifyVerdict> | null {
   if (!Array.isArray(results)) return null;
-  const byIndex = new Map<number, unknown>();
+  const out = new Map<number, VerifyVerdict>();
+  const seen = new Set<number>();
   for (const r of results) {
     if (typeof r !== "object" || r === null || Array.isArray(r)) return null;
-    const { index, unsupported } = r as { index?: unknown; unsupported?: unknown };
-    if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= count) return null;
-    if (byIndex.has(index)) return null;
-    byIndex.set(index, unsupported);
+    const { index, checks, revised_text, issue_type } = r as Record<string, unknown>;
+    if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= count || seen.has(index)) return null;
+    seen.add(index);
+    if (!Array.isArray(checks)) continue;
+    const parsed: AssertionCheck[] = [];
+    let ok = true;
+    for (const c of checks) {
+      if (typeof c !== "object" || c === null) {
+        ok = false;
+        break;
+      }
+      const { claim, type, supported, conflict, reason } = c as Record<string, unknown>;
+      if (typeof claim !== "string" || !claim.trim() || typeof supported !== "boolean") {
+        ok = false;
+        break;
+      }
+      parsed.push({
+        claim: claim.trim(),
+        type: typeof type === "string" ? type : "",
+        supported,
+        conflict: conflict === true,
+        reason: typeof reason === "string" ? reason : undefined,
+      });
+    }
+    if (!ok) continue;
+    const issue = issue_type === "unsupported_assertion" || issue_type === "source_conflict" ? issue_type : issue_type == null ? null : undefined;
+    if (issue === undefined) continue;
+    out.set(index, { checks: parsed, revised: typeof revised_text === "string" ? revised_text.trim() : "", issue });
   }
-  return byIndex;
+  return out;
 }
 
-/** unsupported 必须存在且是由非空字符串组成的数组（全部有依据时为空数组），否则返回 null 表示结论无效 */
-function parseUnsupported(value: unknown): string[] | null {
-  if (!Array.isArray(value)) return null;
-  if (!value.every((s) => typeof s === "string" && s.trim().length > 0)) return null;
-  return (value as string[]).map((s) => s.trim());
+/** 结论是否全部有依据（无矛盾、无无依据断言、issue 为空） */
+export function verdictPasses(v: VerifyVerdict): boolean {
+  return v.issue === null && v.checks.every((c) => c.supported && !c.conflict);
 }
 
-/**
- * 按大模型核验结论筛选亮点（items 与 results 用下标对应）：
- * 核验明确指出无依据说法时剔除并写出这些说法；某条没有拿到结论或结论格式不对时按核验失败剔除，
- * 整体结构不可信时整批剔除，不放行未核验的内容。
- */
-export function applyVerification(items: Highlight[], results: unknown) {
-  const byIndex = indexVerifyResults(results, items.length);
-  if (!byIndex) return { kept: [] as Highlight[], dropped: failVerification(items) };
+export const VERIFY_FAILED = "内容核验请求出错或超时，这句暂未核验，不会导出；可以点「重试」";
+export const QA_FAILED = "面试追问生成出错或超时，可以点「重试」";
 
-  const kept: Highlight[] = [];
-  const dropped: DroppedHighlight[] = [];
-  items.forEach((h, i) => {
-    const base = { text: h.text, experienceId: h.experienceId, factIds: h.factIds };
-    if (!byIndex.has(i)) {
-      dropped.push({ ...base, reason: VERIFY_MISSING });
-      return;
-    }
-    const unsupported = parseUnsupported(byIndex.get(i));
-    if (!unsupported) {
-      dropped.push({ ...base, reason: VERIFY_FAILED });
-      return;
-    }
-    if (unsupported.length > 0) {
-      dropped.push({ ...base, reason: `${[...new Set(unsupported)].map((s) => `「${s}」`).join("")}在你的原始描述中找不到依据` });
-      return;
-    }
-    kept.push(h);
-  });
-  return { kept, dropped };
+/** 核验调用失败（技术错误）：句子保留为待处理，不导出、可重试；不判为「找不到依据」 */
+export function failVerification(items: Highlight[]): Highlight[] {
+  return items.map((h) => ({ ...h, exportStatus: "pending", issueType: "technical_error", note: VERIFY_FAILED }));
 }
 
-/** 核验服务整体出错时，这批亮点全部剔除 */
-export function failVerification(items: Highlight[]): DroppedHighlight[] {
-  return items.map((h) => ({ text: h.text, reason: VERIFY_FAILED, experienceId: h.experienceId, factIds: h.factIds }));
+/** 问答调用失败：只标记面试准备失败，简历句照常可用 */
+export function failQA(items: Highlight[]): Highlight[] {
+  return items.map((h) => ({ ...h, questions: [], qaFailed: true }));
 }
 
-export const QA_FAILED = "面试追问生成服务出错或超时，未能确认这条亮点经得起追问，请稍后重新生成";
-export const QA_MISSING = "没有拿到这条亮点的面试追问与参考回答，请重新生成";
-
-/** 问答服务整体出错时，这批亮点全部剔除（与核验失败一致，fail-closed） */
-export function failQA(items: Highlight[]): DroppedHighlight[] {
-  return items.map((h) => ({ text: h.text, reason: QA_FAILED, experienceId: h.experienceId, factIds: h.factIds }));
-}
-
-/**
- * 给已核验的亮点挂上面试问答：raw 是模型返回的 questions，只经过 JSON 解析，没有结构保证。
- * 只采信 q、a 都是非空字符串的条目；一条有效问答都没有时按「没拿到问答」剔除。
- * 每个参考回答按 checkAnswer 校验：不可信的回答替换为补充提示、标 insufficient，亮点保留。
- */
-export function applyQA(h: Highlight, raw: unknown, experiences: Experience[]): { kept?: Highlight; dropped?: DroppedHighlight } {
-  const base = { text: h.text, experienceId: h.experienceId, factIds: h.factIds };
-  const exp = experiences.find((e) => e.id === h.experienceId);
-  if (!exp) return { dropped: { text: h.text, reason: "未关联到任何经历", factIds: h.factIds } };
-  const facts = exp.facts.filter((f) => h.factIds.includes(f.id));
-  const items: unknown[] = Array.isArray(raw) ? raw : [];
-  const parsed: QA[] = items.flatMap((item) => {
+/** 解析模型返回的追问；q 必须是非空字符串，a 允许为空（表示来源不足） */
+export function parseQuestions(raw: unknown): QA[] | null {
+  if (!Array.isArray(raw)) return null;
+  const parsed: QA[] = raw.flatMap((item) => {
     if (typeof item !== "object" || item === null) return [];
-    const { q, a, factIds } = item as { q?: unknown; a?: unknown; factIds?: unknown };
-    if (typeof q !== "string" || !q.trim() || typeof a !== "string" || !a.trim()) return [];
+    const { q, a, factIds, missing_details } = item as Record<string, unknown>;
+    if (typeof q !== "string" || !q.trim()) return [];
     const ids = Array.isArray(factIds) ? factIds.filter((id): id is string => typeof id === "string") : [];
-    return [{ q: q.trim(), a, factIds: ids }];
+    const missing = Array.isArray(missing_details) ? missing_details.filter((m): m is string => typeof m === "string" && !!m.trim()) : [];
+    return [{ q: q.trim(), a: typeof a === "string" ? a.trim() : "", factIds: ids, missingDetails: missing }];
   });
-  // 有任何格式异常的条目或不足 2 组问答（PRD 要求 2-3 个追问）时，视为没拿到问答，剔除
-  if (parsed.length < 2 || parsed.length !== items.length) return { dropped: { ...base, reason: QA_MISSING } };
-  // 亮点本身已通过核验、出自原话，追问答不上来不再剔除亮点（产品决策）：答不上来的追问不展示编造的回答，
-  // 标为「需要你补充」；展示前 3 组（PRD「2-3 个追问」），答得上来的排在前面
-  const questions = parsed.map((qa) => checkAnswer(qa, exp.facts, facts));
+  return parsed.length > 0 ? parsed : null;
+}
+
+/**
+ * 参考回答的规则检查：没有回答、或回答里有所引事实没有的数字/英文名词时，不展示草稿，标 needs_details。
+ * 引用了不属于本段经历的 id 时以亮点所引事实为依据。中文断言由 /api/qa 再调用核验模型检查。
+ */
+export function checkAnswer(qa: QA, expFacts: Fact[], highlightFacts: Fact[]): QA {
+  const cited = expFacts.filter((f) => (qa.factIds ?? []).includes(f.id) && !isInstructionFact(f));
+  const facts = cited.length > 0 ? cited : highlightFacts;
+  const factIds = facts.map((f) => f.id);
+  const a = (qa.a ?? "").trim();
+  if (!a || a.startsWith(INSUFFICIENT_PREFIX)) return needsDetails({ ...qa, factIds }, []);
+  const unknown = ruleIssues(a, facts);
+  if (unknown.length > 0) return needsDetails({ ...qa, factIds }, [`AI 草稿里出现了你没提过的「${unknown.slice(0, 3).join("、")}」，已隐藏`]);
+  return { ...qa, a, factIds, preparationStatus: "ready", insufficient: false };
+}
+
+/** 标为需要补充：隐藏草稿，保留问题和待补细节（不影响简历句和事实） */
+export function needsDetails(qa: QA, extra: string[]): QA {
+  const missing = [...new Set([...(qa.missingDetails ?? []), ...extra])];
+  return { ...qa, a: "", preparationStatus: "needs_details", insufficient: true, missingDetails: missing.length ? missing : ["这道题的具体做法和结果"] };
+}
+
+/** 展示前 3 组追问（PRD「2-3 个追问」）：答得上来的在前，有待补充的至少保留一道 */
+export function pickQuestions(questions: QA[]): QA[] {
   const good = questions.filter((q) => !isInsufficient(q));
   const weak = questions.filter(isInsufficient);
-  // 有需要补充的题时至少保留一道，不让它被截掉而看不到提示
-  const shown = weak.length > 0 ? [...good.slice(0, 2), ...weak].slice(0, 3) : good.slice(0, 3);
-  return { kept: { ...h, questions: shown } };
+  return weak.length > 0 ? [...good.slice(0, 2), ...weak].slice(0, 3) : good.slice(0, 3);
 }
 
-/**
- * 生成简历后履历库又被修改：亮点所引事实被删除或原话已变，核验结论就不再成立，读取时移入 dropped。
- * 只处理经过核验流程的简历；旧简历没有原话快照，本身不允许导出。
- */
-export function dropStale(resume: ResumeResult, experiences: Experience[]): ResumeResult {
-  if (!resume.provenanceChecked) return resume;
-  const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, f] as const)));
-  const highlights: Highlight[] = [];
-  const dropped: DroppedHighlight[] = [...resume.dropped];
-  for (const h of resume.highlights) {
-    const stale =
-      h.factIds.length === 0 || h.factIds.some((id) => factById.get(id)?.source !== h.sources?.[id] || h.sources?.[id] === undefined);
-    if (stale) {
-      dropped.push({ text: h.text, reason: "所引用的履历事实在生成简历后被修改或删除，请重新生成", experienceId: h.experienceId, factIds: h.factIds });
-    } else highlights.push(h);
-  }
-  return { ...resume, highlights, dropped };
-}
-
+/** 旧数据用的前缀；新数据以 preparationStatus 为准 */
 export const INSUFFICIENT_PREFIX = "（素材不足";
 
-/**
- * 参考回答是否不可信：带 insufficient 标记，或回答以 INSUFFICIENT_PREFIX 开头
- * （e24ceda 之前存下的数据没有 insufficient 字段，只能靠前缀识别）
- */
+/** 参考回答是否需要用户补充 */
 export function isInsufficient(qa: QA): boolean {
-  return qa.insufficient === true || (qa.a ?? "").trim().startsWith(INSUFFICIENT_PREFIX);
+  return qa.preparationStatus === "needs_details" || qa.insufficient === true || (qa.a ?? "").trim().startsWith(INSUFFICIENT_PREFIX);
 }
 
 /** 亮点里需要用户补充的追问数 */
@@ -198,32 +214,24 @@ export function needsInput(h: Highlight): number {
   return (h.questions ?? []).filter(isInsufficient).length;
 }
 
+/** 亮点能否导出：经过核验流程的简历里，状态为 ready（旧数据没有状态，按 ready） */
+export function isExportable(h: Highlight, resume: Pick<ResumeResult, "provenanceChecked">): boolean {
+  return !!resume.provenanceChecked && (h.exportStatus ?? "ready") === "ready";
+}
+
 /**
- * 校验面试参考回答：回答里的数字和英文专有名词必须出现在所引事实（含原话）中。
- * 回答未单独引用事实时，以所属亮点引用的事实为依据。不通过的回答替换为补充提示，不展示编造内容。
+ * 生成简历后履历库又被修改：亮点所引事实被删除或原话已变，只把受影响的句子标为「来源已修改，待重验」（02 §5、T12），
+ * 不删除、不影响其他句子。旧简历没有原话快照，本身不允许导出，原样返回。
  */
-export function checkAnswer(qa: QA, expFacts: Fact[], highlightFacts: Fact[]): QA {
-  const a = (qa.a ?? "").trim();
-  if (isInsufficient({ ...qa, a })) return { ...qa, a, insufficient: true };
-
-  const cited = expFacts.filter((f) => (qa.factIds ?? []).includes(f.id));
-  const facts = cited.length > 0 ? cited : highlightFacts;
-  const evidence = facts.map((f) => `${f.text} ${f.source}`).join(" ");
-  const nums = new Set(evidence.match(NUM_RE) ?? []);
-  const terms = new Set((evidence.match(TERM_RE) ?? []).map((t) => t.toLowerCase()));
-
-  const unknownNums = (a.match(NUM_RE) ?? []).filter((n) => !nums.has(n));
-  const unknownTerms = (a.match(TERM_RE) ?? []).filter((t) => !terms.has(t.toLowerCase()));
-  if (unknownNums.length === 0 && unknownTerms.length === 0 && a) {
-    return { ...qa, a, factIds: facts.map((f) => f.id) };
-  }
-  const missing = [...unknownNums, ...unknownTerms];
-  return {
-    ...qa,
-    a: `${INSUFFICIENT_PREFIX}，建议面试前补充：结合你的真实经历准备这道题的具体做法和结果${
-      missing.length ? `（AI 草稿里出现了你没提过的「${[...new Set(missing)].slice(0, 3).join("、")}」，已隐藏）` : ""
-    }）`,
-    factIds: facts.map((f) => f.id),
-    insufficient: true,
-  };
+export function markStale(resume: ResumeResult, experiences: Experience[]): ResumeResult {
+  if (!resume.provenanceChecked) return resume;
+  const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, f] as const)));
+  const highlights = resume.highlights.map((h) => {
+    const stale =
+      h.factIds.length === 0 || h.factIds.some((id) => h.sources?.[id] === undefined || factById.get(id)?.source !== h.sources?.[id]);
+    return stale
+      ? { ...h, exportStatus: "pending" as const, issueType: "stale" as const, note: "引用的履历事实在生成后被修改或删除，需要重新核验" }
+      : h;
+  });
+  return { ...resume, highlights };
 }
