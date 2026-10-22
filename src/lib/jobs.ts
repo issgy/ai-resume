@@ -223,7 +223,7 @@ function buildReview(data: ImportResponse, vault: Experience[]): ImportReview {
     const label = [imp.company, imp.title, [imp.start, imp.end].filter(Boolean).join("–")].filter(Boolean).join(" · ");
     const v = vault.find((e) => experienceKey(e) === key && (!e.start.trim() || !imp.start.trim() || monthKey(e.start) === monthKey(imp.start) || overlaps(e, imp)));
     if (v) {
-      duplicates.push({ index: i, existingId: v.id, label, dates: datesDiffer(v, imp) ? { existing: range(v), imported: range(imp) } : undefined, reason: `履历库已有「${[v.company, v.title, [v.start, v.end].filter(Boolean).join("–")].filter(Boolean).join(" · ")}」，公司和岗位相同、时间${monthKey(v.start) === monthKey(imp.start) ? "相同（写法不同）" : "重叠或缺失"}` });
+      duplicates.push({ index: i, existingId: v.id, label, dates: datesDiffer(v, imp) ? { existing: range(v), imported: range(imp) } : undefined, reason: `履历库已有「${[v.company, v.title, [v.start, v.end].filter(Boolean).join("–")].filter(Boolean).join(" · ")}」，公司和岗位相同、${monthKey(v.start) === monthKey(imp.start) ? (datesDiffer(v, imp) ? "开始时间相同、结束时间不一致" : "时间相同（写法不同）") : "时间重叠或缺失"}` });
       return;
     }
     const j = data.experiences.findIndex((o, k) => k < i && experienceKey(o) === key && (monthKey(o.start) === monthKey(imp.start) || overlaps(o, imp)));
