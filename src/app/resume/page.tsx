@@ -205,7 +205,12 @@ export default function ResumePage() {
                         {h.questions.map((q, j) => (
                           <div key={j} className="mt-1">
                             <div>Q：{q.q}</div>
-                            {isInsufficient(q) ? (
+                            {q.retryable ? (
+                              <div className="text-slate-500">
+                                <span className="mr-1 rounded-full bg-slate-100 px-1.5 py-0.5">待更新</span>
+                                参考回答暂不展示：{q.missingDetails?.[q.missingDetails.length - 1] ?? "模型出错或来源已修改"}
+                              </div>
+                            ) : isInsufficient(q) ? (
                               <div className="text-amber-800">
                                 <span className="mr-1 rounded-full bg-amber-100 px-1.5 py-0.5">需要你补充</span>
                                 {q.missingDetails?.length ? `待补：${q.missingDetails.join("；")}。` : "你的原始描述里没有这道题的答案。"}

@@ -215,7 +215,8 @@ export function isInsufficient(qa: QA): boolean {
 
 /** 亮点里需要用户补充的追问数 */
 export function needsInput(h: Highlight): number {
-  return (h.questions ?? []).filter(isInsufficient).length;
+  // 可重试的（模型出错、来源已修改）不算「需要你补充」
+  return (h.questions ?? []).filter((q) => isInsufficient(q) && !q.retryable).length;
 }
 
 /** 亮点能否导出：经过核验流程的简历里，状态为 ready（旧数据没有状态，按 ready） */
