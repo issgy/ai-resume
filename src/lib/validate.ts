@@ -224,6 +224,11 @@ export function isExportable(h: Highlight, resume: Pick<ResumeResult, "provenanc
   return !!resume.provenanceChecked && (h.exportStatus ?? "ready") === "ready";
 }
 
+/** 是否选入本份简历：低相关的可选内容、用户移出的不放进简历（可恢复） */
+export function isIncluded(h: Highlight): boolean {
+  return h.selection !== "optional" && h.selection !== "hidden_by_user";
+}
+
 /**
  * 生成简历后履历库又被修改：亮点所引事实被删除或原话已变，只把受影响的句子标为「来源已修改，待重验」（02 §5、T12），
  * 不删除、不影响其他句子。旧简历没有原话快照，本身不允许导出，原样返回。
