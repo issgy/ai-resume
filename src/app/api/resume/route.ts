@@ -55,7 +55,8 @@ export async function POST(req: Request) {
   }));
   try {
     // 每段经历单独并行生成，且只输出亮点（不含面试问答）：单次输出更短，总耗时约等于最慢的一段，避免超时
-    const targets = payload.filter((p) => p.facts.length > 0);
+    // 没有公司和岗位的记录（未归类内容）不进入成稿（T10）：先在履历库补上公司或岗位
+    const targets = payload.filter((p) => p.facts.length > 0 && (p.company.trim() || p.title.trim()));
     const results = await Promise.allSettled(
       targets.map((p) =>
         callLLMJson<unknown>([
