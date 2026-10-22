@@ -3,13 +3,13 @@
 import { useSyncExternalStore } from "react";
 import { postJson } from "@/components/ui";
 import { KEYS, read, uid, writeStored } from "@/lib/storage";
-import { BULLET_RE, findSameExperience } from "@/lib/importText";
+import { BULLET_RE, experienceKey, findSameExperience } from "@/lib/importText";
 import type { ImportResponse } from "@/lib/importText";
 import type { AbilityEvidence, Education, Experience, Highlight, MatchResult, Profile, Requirement, ResumeResult, Selection } from "@/lib/types";
 import { educationKey } from "@/lib/education";
 import { refreshMatch } from "@/lib/matching";
 import type { AbilityDecisions } from "@/lib/matching";
-import { checkHighlights, failQA, failVerification, markStale, norm, tidyBullet } from "@/lib/validate";
+import { checkHighlights, failQA, failVerification, isInstructionFact, markStale, norm, tidyBullet } from "@/lib/validate";
 
 /**
  * 「粘贴简历导入」「分析匹配」「生成定向简历」的后台任务。
@@ -37,6 +37,8 @@ export type ImportSummary = {
   unassigned: number;
   /** 新增的教育背景条数（与已有学校 + 学历相同的跳过）；旧版本没有该字段 */
   education?: number;
+  /** 作为资料备注没有存成事实的条数 */
+  notes?: number;
 };
 
 export type JobsState = {
@@ -52,6 +54,8 @@ export type JobsState = {
   importSummary: ImportSummary | null;
   /** 用户不在任务所属页面时的完成/失败提示，显示在顶部导航 */
   notice: Notice | null;
+  /** 导入解析完成、等待用户集中确认的内容（疑似重复、资料备注、无名记录）；没有需要确认的内容时直接入库 */
+  importReview: ImportReview | null;
   /** 正在局部重试的经历 id */
   retrying: string | null;
   /** 最近一次局部重试的失败原因 */
@@ -66,7 +70,7 @@ const INTERRUPTED: Record<JobKind, string> = {
 };
 const HREF: Record<JobKind, string> = { import: "/collect", match: "/match", resume: "/match" };
 
-const SERVER_STATE: JobsState = { import: null, match: null, resume: null, error: "", importError: "", importSummary: null, notice: null, retrying: null, retryError: "" };
+const SERVER_STATE: JobsState = { import: null, match: null, resume: null, error: "", importError: "", importSummary: null, importReview: null, notice: null, retrying: null, retryError: "" };
 let state: JobsState = SERVER_STATE;
 let initialized = false;
 const listeners = new Set<() => void>();
@@ -150,19 +154,116 @@ const STORAGE_FAILED = "浏览器存储空间不足或被禁用，导入内容�
 const PROFILE_LABELS: Record<keyof Profile, string> = { name: "姓名", phone: "电话", email: "邮箱", school: "学校", birthday: "出生日期" };
 const EMPTY_PROFILE: Profile = { name: "", phone: "", email: "", school: "", birthday: "" };
 
+/** 导入前需要用户集中确认的内容（02 S1：疑似重复确认、资料备注与事实分离、无名记录不进入成稿） */
+export type ImportReview = {
+  data: ImportResponse;
+  /** 疑似重复：导入的第 index 段与履历库已有经历 existingId（或同一次导入的第 otherIndex 段） */
+  duplicates: {
+    index: number;
+    existingId?: string;
+    otherIndex?: number;
+    label: string;
+    reason: string;
+    /** 已能确认是同一段（同开始时间或事实重合），只需确认时间 */
+    sure?: boolean;
+    /** 两边起止时间不一致：合并时由用户选用哪一边，不默认取旧值，也不自动取最大区间 */
+    dates?: { existing: { start: string; end: string }; imported: { start: string; end: string } };
+  }[];
+  /** 看起来是资料备注或写给 AI 的指令，默认不作为经历事实 */
+  notes: { index: number; factIndex: number; text: string }[];
+  /** 没有公司和岗位的记录：会进履历库「未归类」，但不会写进简历 */
+  unnamed: number[];
+};
+export type ImportChoices = { merge: Record<number, boolean>; keepNotes: Record<string, boolean>; dates?: Record<number, "existing" | "imported"> };
+
+/** 资料备注：「证据待收集」「###下一项目」「TODO」这类整理资料时留下的说明，不是候选人的行为 */
+// 只认整条就是备注的写法；「建立待确认需求清单」「备注：独立完成供应商评估…」这类含真实行为的不算（拿不准时保留为事实，
+// 写给 AI 的要求仍由 isInstructionFact 识别）
+const NOTE_RE =
+  /^\s*(#{2,}.*|(todo|tbd)\b.*|((证据|材料|数据|内容|细节|成果|结果|量化)\s*)?(待收集|待补充|待完善|待确认|待核实|待整理)[。.!！]?|此处填写.*|(示例文字|占位(符|内容)?)[。.]?|下一(个|段)?(项目|经历)[:：]?)\s*$/i;
+
+/** 时间归一到「年-月」，只用于疑似重复判断（「2025-06」「2025.06」「2025年6月」视为同一月），不改原文 */
+function monthKey(s: string): number | null {
+  const m = s.match(/((?:19|20)\d{2})\s*(?:[-./年]\s*(\d{1,2}))?/);
+  if (!m) return /至今|现在|present|now/i.test(s) ? Infinity : null;
+  return Number(m[1]) * 12 + (m[2] ? Number(m[2]) - 1 : 0);
+}
+function overlaps(a: { start: string; end: string }, b: { start: string; end: string }): boolean {
+  const as = monthKey(a.start), bs = monthKey(b.start);
+  if (as === null || bs === null) return false;
+  const ae = monthKey(a.end) ?? as, be = monthKey(b.end) ?? bs;
+  return as <= be && bs <= ae;
+}
+
+/** 起止时间是否矛盾（只比双方都写了的部分；写法不同但同一月不算） */
+function datesDiffer(a: { start: string; end: string }, b: { start: string; end: string }): boolean {
+  const diff = (x: string, y: string) => {
+    if (!x.trim() || !y.trim()) return false;
+    const kx = monthKey(x), ky = monthKey(y);
+    return kx !== null && ky !== null ? kx !== ky : norm(x) !== norm(y);
+  };
+  return diff(a.start, b.start) || diff(a.end, b.end);
+}
+
+function buildReview(data: ImportResponse, vault: Experience[]): ImportReview {
+  const duplicates: ImportReview["duplicates"] = [];
+  data.experiences.forEach((imp, i) => {
+    const key = experienceKey(imp);
+    if (!key) return;
+    const range = (e: { start: string; end: string }) => ({ start: e.start, end: e.end });
+    // 能确认是同一段（同公司同岗位同开始时间，或事实重合）的自动合并；只有起止时间不一致时才请用户选时间
+    const same = findSameExperience(vault, imp);
+    if (same >= 0) {
+      const v = vault[same];
+      if (datesDiffer(v, imp)) {
+        const label = [imp.company, imp.title].filter(Boolean).join(" · ");
+        duplicates.push({ index: i, existingId: v.id, sure: true, label, reason: "履历库已有这段经历，但起止时间与这次导入的不一致", dates: { existing: range(v), imported: range(imp) } });
+      }
+      return;
+    }
+    const label = [imp.company, imp.title, [imp.start, imp.end].filter(Boolean).join("–")].filter(Boolean).join(" · ");
+    const v = vault.find((e) => experienceKey(e) === key && (!e.start.trim() || !imp.start.trim() || monthKey(e.start) === monthKey(imp.start) || overlaps(e, imp)));
+    if (v) {
+      duplicates.push({ index: i, existingId: v.id, label, dates: datesDiffer(v, imp) ? { existing: range(v), imported: range(imp) } : undefined, reason: `履历库已有「${[v.company, v.title, [v.start, v.end].filter(Boolean).join("–")].filter(Boolean).join(" · ")}」，公司和岗位相同、${monthKey(v.start) === monthKey(imp.start) ? (datesDiffer(v, imp) ? "开始时间相同、结束时间不一致" : "时间相同（写法不同）") : "时间重叠或缺失"}` });
+      return;
+    }
+    const j = data.experiences.findIndex((o, k) => k < i && experienceKey(o) === key && (monthKey(o.start) === monthKey(imp.start) || overlaps(o, imp)));
+    const o = data.experiences[j];
+    if (j >= 0) duplicates.push({ index: i, otherIndex: j, label, dates: datesDiffer(o, imp) ? { existing: range(o), imported: range(imp) } : undefined, reason: "这次导入里有另一段公司、岗位相同且时间相同或重叠的记录" });
+  });
+  const notes: ImportReview["notes"] = [];
+  data.experiences.forEach((imp, i) =>
+    imp.facts.forEach((f, k) => {
+      if (NOTE_RE.test(f.source) || isInstructionFact(f)) notes.push({ index: i, factIndex: k, text: f.source });
+    }),
+  );
+  const unnamed = data.experiences.map((e, i) => (!e.company.trim() && !e.title.trim() && e.facts.length > 0 ? i : -1)).filter((i) => i >= 0);
+  return { data, duplicates, notes, unnamed };
+}
+
 /**
- * 把导入结果写入履历库（产品决策：不逐条确认）：同 company + title 的经历合并到已有经历，按 source 跳过已有事实；
+ * 把导入结果写入履历库：同 company + title 的经历合并到已有经历，按 source 跳过已有事实；同 company + title 的经历合并到已有经历，按 source 跳过已有事实；
  * 其余作为新经历追加。个人信息只填充当前为空的字段。以 localStorage 中的最新值为准。
  */
-function applyImport(data: ImportResponse): ImportSummary {
+function applyImport(review: ImportReview, choices: ImportChoices = { merge: {}, keepNotes: {} }): ImportSummary {
+  const data = review.data;
   const experiences = read<Experience[]>(KEYS.experiences, []);
   let added = 0;
   let merged = 0;
   let facts = 0;
   let duplicates = 0;
-  for (const imp of data.experiences) {
-    // 没有公司和岗位的「未归类」内容也合并到已有的未归类经历，重复导入时不再多出一段
-    const idx = findSameExperience(experiences, imp);
+  // 资料备注默认不作为事实；用户勾选保留的除外
+  const isNote = new Set(review.notes.filter((n) => !choices.keepNotes[`${n.index}-${n.factIndex}`]).map((n) => `${n.index}-${n.factIndex}`));
+  const dupOf = new Map(review.duplicates.map((d) => [d.index, d]));
+  const placed = new Map<number, number>(); // 导入序号 → 写入后的履历库位置
+  data.experiences.forEach((rawImp, i) => {
+    const imp = { ...rawImp, facts: rawImp.facts.filter((_, k) => !isNote.has(`${i}-${k}`)) };
+    if (imp.facts.length === 0 && !imp.company.trim() && !imp.title.trim()) return;
+    // 疑似重复：用户选择合并时并入对应经历，否则保留为独立的一段（02 S1：不自动合并可能不同的任职）
+    const d = dupOf.get(i);
+    let idx = -1;
+    if (d && (d.sure || choices.merge[i])) idx = d.existingId ? experiences.findIndex((e) => e.id === d.existingId) : (placed.get(d.otherIndex!) ?? -1);
+    else if (!d) idx = findSameExperience(experiences, imp);
     const existing = idx >= 0 ? experiences[idx] : null;
     // 原文或整理后的文字任一相同都算重复（忽略行首项目符号），避免重复导入同一份简历时多出事实
     const strip = (s: string) => norm(s.replace(BULLET_RE, ""));
@@ -181,12 +282,18 @@ function applyImport(data: ImportResponse): ImportSummary {
     facts += fresh.length;
     if (existing) {
       merged++;
-      experiences[idx] = { ...existing, start: existing.start || imp.start, end: existing.end || imp.end, facts: [...existing.facts, ...fresh] };
+      // 时间矛盾时按用户的选择；没矛盾时只补空缺
+      const useImported = !!d?.dates && choices.dates?.[i] === "imported";
+      const start = useImported ? imp.start || existing.start : existing.start || imp.start;
+      const end = useImported ? imp.end || existing.end : existing.end || imp.end;
+      experiences[idx] = { ...existing, start, end, facts: [...existing.facts, ...fresh] };
+      placed.set(i, idx);
     } else {
       added++;
       experiences.push({ id: uid(), company: imp.company, title: imp.title, start: imp.start, end: imp.end, facts: fresh });
+      placed.set(i, experiences.length - 1);
     }
-  }
+  });
   // 写不进浏览器存储（空间不足或被禁用）时不能提示导入成功
   if (!writeStored(KEYS.experiences, experiences)) throw new Error(STORAGE_FAILED);
 
@@ -213,22 +320,46 @@ function applyImport(data: ImportResponse): ImportSummary {
   }
   if (eduAdded > 0 && !writeStored(KEYS.education, education)) throw new Error(STORAGE_FAILED);
 
-  return { added, merged, facts, duplicates, rejected: data.rejected, profileFields, unassigned: data.unassigned, education: eduAdded };
+  return { added, merged, facts, duplicates, rejected: data.rejected, profileFields, unassigned: data.unassigned, education: eduAdded, notes: isNote.size };
+}
+
+function finishImport(review: ImportReview, choices?: ImportChoices) {
+  const summary = applyImport(review, choices);
+  const partial = summary.unassigned > 0 ? "，有部分内容没能归到具体经历" : "";
+  update({
+    import: null,
+    importReview: null,
+    importSummary: summary,
+    notice: { tone: "success", text: `简历导入完成：新增 ${summary.added} 段、合并 ${summary.merged} 段经历${partial}，点击查看`, href: "/collect" },
+  });
+}
+
+/** 用户在集中确认面板里确认导入 */
+export function confirmImport(choices: ImportChoices) {
+  if (!state.importReview) return;
+  try {
+    finishImport(state.importReview, choices);
+  } catch (e) {
+    update({ importError: (e as Error).message });
+  }
+}
+
+/** 放弃这次导入（不写入任何内容） */
+export function cancelImport() {
+  update({ importReview: null, import: null });
 }
 
 export async function runImport(text: string) {
-  if (state.import) return;
+  // 上一批还在等确认时不开始新的解析，免得上一批的选择套到新结果上
+  if (state.import || state.importReview) return;
   update({ import: "import", importError: "", importSummary: null, notice: null });
   markPending("import", true);
   try {
     const data = await postJson<ImportResponse>("/api/import", { text });
-    const summary = applyImport(data);
-    const partial = summary.unassigned > 0 ? "，有部分内容没能归到具体经历" : "";
-    update({
-      import: null,
-      importSummary: summary,
-      notice: { tone: "success", text: `简历导入完成：新增 ${summary.added} 段、合并 ${summary.merged} 段经历${partial}，点击查看`, href: "/collect" },
-    });
+    const review = buildReview(data, read<Experience[]>(KEYS.experiences, []));
+    // 没有需要确认的内容就直接入库；有疑似重复、资料备注、无名记录时集中确认一次（不逐条确认事实）
+    if (review.duplicates.length === 0 && review.notes.length === 0 && review.unnamed.length === 0) finishImport(review);
+    else update({ import: null, importReview: review, notice: { tone: "success", text: "简历解析完成，有几处需要你确认后再存入", href: "/collect" } });
   } catch (e) {
     const message = (e as Error).message;
     update({ import: null, importError: message, notice: { tone: "error", text: `简历导入失败：${message}`, href: "/collect" } });

@@ -6,7 +6,8 @@ import { useRouter } from "next/navigation";
 import { Button, Card, ErrorText, PageHeader, httpError, postJson } from "@/components/ui";
 import { Logo } from "@/components/logo";
 import { IMPORT_MAX, IMPORT_MIN } from "@/lib/importText";
-import { runImport, useJobs } from "@/lib/jobs";
+import { cancelImport, confirmImport, runImport, useJobs } from "@/lib/jobs";
+import type { ImportReview } from "@/lib/jobs";
 import { KEYS, uid, useStored } from "@/lib/storage";
 import type { ChatMessage, Experience } from "@/lib/types";
 
@@ -84,7 +85,7 @@ function PasteImport() {
             {tooShort && `，内容太短（至少 ${IMPORT_MIN} 字）`}
             {tooLong && "，超出上限，请删减后再导入"}
           </span>
-          <Button variant="accent" onClick={() => runImport(text.trim())} disabled={running || count < IMPORT_MIN || tooLong}>
+          <Button variant="accent" onClick={() => runImport(text.trim())} disabled={running || !!jobs.importReview || count < IMPORT_MIN || tooLong}>
             {running ? "解析中，可以先去做别的…" : "解析并存入履历库"}
           </Button>
         </div>
@@ -93,6 +94,8 @@ function PasteImport() {
 
       <ErrorText>{jobs.importError}</ErrorText>
 
+      {jobs.importReview && <ImportReviewPanel review={jobs.importReview} />}
+
       {s && (
         <Card className="animate-rise space-y-4">
           <h2 className="text-lg font-semibold">导入完成</h2>
@@ -100,6 +103,7 @@ function PasteImport() {
             <li>新增 {s.added} 段经历，合并到已有经历 {s.merged} 段，共写入 {s.facts} 条事实</li>
             {s.duplicates > 0 && <li className="text-muted">{s.duplicates} 条与履历库中已有事实出自同一原文，已跳过</li>}
             {s.rejected > 0 && <li className="text-warn">{s.rejected} 条因在原文中找不到依据被丢弃</li>}
+            {!!s.notes && <li className="text-muted">{s.notes} 条资料备注没有存成经历事实</li>}
             {!!s.education && <li>新增 {s.education} 段教育背景，可在履历库查看和修改</li>}
             <li>{s.profileFields.length > 0 ? `个人信息填充了：${s.profileFields.join("、")}` : "个人信息没有需要填充的字段（已填写的不会被覆盖）"}</li>
             {s.unassigned > 0 && (
@@ -115,6 +119,92 @@ function PasteImport() {
         </Card>
       )}
     </div>
+  );
+}
+
+/**
+ * 导入前的集中确认（02 S1、T09、T10）：只在有疑似重复、资料备注、无名记录时出现一次，不逐条确认事实。
+ * 疑似重复默认「保留为两段」（不自动合并可能不同的任职），资料备注默认不存成事实。
+ */
+function ImportReviewPanel({ review }: { review: ImportReview }) {
+  const [merge, setMerge] = useState<Record<number, boolean>>({});
+  const [keepNotes, setKeepNotes] = useState<Record<string, boolean>>({});
+  const [dates, setDates] = useState<Record<number, "existing" | "imported">>({});
+  const exp = (i: number) => review.data.experiences[i];
+  const span = (d: { start: string; end: string }) => [d.start, d.end].filter(Boolean).join(" – ") || "未写时间";
+  // 要合并且起止时间不一致的，必须先选用哪边的时间
+  const missingDate = review.duplicates.some((d) => d.dates && (d.sure || merge[d.index]) && !dates[d.index]);
+  return (
+    <Card className="animate-rise space-y-4 border-amber-200">
+      <div>
+        <h2 className="text-lg font-semibold">存入前请确认这几处</h2>
+        <p className="text-xs text-muted">其余内容没有问题，确认后一起存入履历库。</p>
+      </div>
+      {review.duplicates.length > 0 && (
+        <section className="space-y-2">
+          <h3 className="text-sm font-semibold">疑似重复的经历</h3>
+          <p className="text-xs text-muted">合并后事实归到同一段，年限不会重复计算；如果确实是两段不同的任职，请选「保留两段」。</p>
+          {review.duplicates.map((d) => (
+            <div key={d.index} className="space-y-1 rounded-2xl border border-line bg-paper/60 p-3 text-sm">
+              <div className="font-medium">{d.label || "未命名经历"}</div>
+              <div className="text-xs text-muted">{d.reason}</div>
+              {!d.sure && (
+                <div className="flex gap-3 text-xs">
+                  <label className="flex items-center gap-1">
+                    <input type="radio" checked={!!merge[d.index]} onChange={() => setMerge({ ...merge, [d.index]: true })} /> 是同一段，合并
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <input type="radio" checked={!merge[d.index]} onChange={() => setMerge({ ...merge, [d.index]: false })} /> 保留两段
+                  </label>
+                </div>
+              )}
+              {d.dates && (d.sure || merge[d.index]) && (
+                <div className="space-y-1 rounded-lg bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+                  <div>两边的起止时间不一致，合并后用哪一个？（会影响工作年限的计算）</div>
+                  <label className="flex items-center gap-1">
+                    <input type="radio" checked={dates[d.index] === "existing"} onChange={() => setDates({ ...dates, [d.index]: "existing" })} />
+                    {d.existingId ? "履历库里的" : "这次导入的另一段"}：{span(d.dates.existing)}
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <input type="radio" checked={dates[d.index] === "imported"} onChange={() => setDates({ ...dates, [d.index]: "imported" })} />
+                    这次导入的：{span(d.dates.imported)}
+                  </label>
+                </div>
+              )}
+            </div>
+          ))}
+        </section>
+      )}
+      {review.notes.length > 0 && (
+        <section className="space-y-2">
+          <h3 className="text-sm font-semibold">看起来是资料备注或写给 AI 的要求</h3>
+          <p className="text-xs text-muted">这些默认不存成你的经历事实；如果其实是你做过的事，勾选保留。</p>
+          {review.notes.map((n) => {
+            const k = `${n.index}-${n.factIndex}`;
+            return (
+              <label key={k} className="flex items-start gap-2 text-sm">
+                <input type="checkbox" className="mt-1" checked={!!keepNotes[k]} onChange={(e) => setKeepNotes({ ...keepNotes, [k]: e.target.checked })} />
+                <span>
+                  {n.text}
+                  <span className="ml-1 text-xs text-muted">· {[exp(n.index).company, exp(n.index).title].filter(Boolean).join(" · ") || "未归类"}</span>
+                </span>
+              </label>
+            );
+          })}
+        </section>
+      )}
+      {review.unnamed.length > 0 && (
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          有 {review.unnamed.reduce((n, i) => n + exp(i).facts.length, 0)} 条内容没有对应的公司或岗位，会放进履历库的「未归类」；补上公司或岗位之前不会写进简历。
+        </p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        <Button variant="accent" onClick={() => confirmImport({ merge, keepNotes, dates })} disabled={missingDate}>
+          {missingDate ? "请先选择起止时间" : "确认存入履历库"}
+        </Button>
+        <Button variant="ghost" onClick={cancelImport}>放弃这次导入</Button>
+      </div>
+    </Card>
   );
 }
 

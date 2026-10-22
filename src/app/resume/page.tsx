@@ -343,12 +343,16 @@ export default function ResumePage() {
       {notGenerated.length > 0 && (
         <div className="no-print space-y-3 rounded-3xl border border-line bg-card p-5 text-sm">
           <h2 className="font-semibold">本次没有写入简历的经历</h2>
-          <p className="text-xs text-muted">这些经历的事实都还在履历库里，不是没通过核验；可能是生成简历之后才录入的。</p>
+          <p className="text-xs text-muted">这些经历的事实都还在履历库里，不是没通过核验；可能是生成简历之后才录入的，或者还没有公司/岗位。</p>
           {notGenerated.map(({ exp }) => (
             <section key={exp.id} className="space-y-1">
               <div className="flex items-center justify-between gap-2 font-medium">
                 <span>{experienceLabel(exp)}</span>
-                {retryButton(exp.id, "为这段生成")}
+                {exp.company.trim() || exp.title.trim() ? (
+                  retryButton(exp.id, "为这段生成")
+                ) : (
+                  <Link href="/vault" className="text-xs underline">先到履历库补上公司或岗位</Link>
+                )}
               </div>
               <ul className="space-y-1">
                 {exp.facts.map((f) => (

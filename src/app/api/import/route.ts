@@ -20,10 +20,11 @@ const RETRY_MIN_MS = 15_000;
 
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 /** 模型偶尔会把提示词里的字段说明原样当成值，这些占位词一律视为空 */
-const PLACEHOLDER = /^(公司名称|岗位名称|项目名称|项目所属单位|角色|姓名|电话|邮箱|学校|出生日期|无|暂无|未知|N\/?A|null)$/i;
+const PLACEHOLDER = /^(公司名称|岗位名称|项目名称|项目所属单位|角色|姓名|电话|邮箱|学校|出生日期|无|暂无|未知|N\/?A|null|下一(个|段)?(项目|经历)|新(项目|经历)|(项目|经历)\s*\d*|待(补充|填写|定|确认)|x{2,}|占位)$/i;
 /** 公司、岗位、时间、个人信息都会原样出现在导出的简历上：必须能在原文中找到，并保存原文的原样写法 */
 const field = (v: unknown, original: string) => {
-  const s = str(v);
+  // 资料里的结构标记（「###下一项目」）不是公司或岗位名
+  const s = str(v).replace(/^#+\s*/, "");
   return s && !PLACEHOLDER.test(s) ? literalSpan(s, original) : "";
 };
 
