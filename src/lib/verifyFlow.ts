@@ -91,7 +91,8 @@ export async function verifyExperience(exp: Experience, items: Highlight[], call
           originalText: n.h.text,
           exportStatus: "ready",
           issueType: null,
-          assertionChecks: n.checks,
+          // 保存最终句本轮通过的断言；初稿的问题写在 note 里
+          assertionChecks: o.v.checks,
           note: n.mode === "revise" ? `已删去原话中找不到依据的说法：${quote(n.claims)}` : `已退回你的原话（删去了${quote(n.claims)}）`,
         });
       }

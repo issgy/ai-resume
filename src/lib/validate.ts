@@ -237,11 +237,14 @@ export function markStale(resume: ResumeResult, experiences: Experience[]): Resu
       return { ...h, exportStatus: "pending" as const, issueType: "stale" as const, note: "引用的履历事实在生成后被修改或删除，需要重新核验" };
     }
     // 参考回答可能引用了简历句之外的事实：这些事实变了，只隐藏受影响的回答（R13、T12）
-    const questions = h.questions.map((q) =>
-      !isInsufficient(q) && q.sources && changed(Object.keys(q.sources), q.sources)
-        ? needsDetails(q, ["参考回答引用的事实已修改，请重试这段以重新生成"])
-        : q,
-    );
+    const questions = h.questions.map((q) => {
+      if (isInsufficient(q)) return q;
+      // 新数据按回答自己的来源快照判断；旧回答没有快照时，只要引用了简历句之外的事实就无法确认仍然成立，保守隐藏
+      const stale = q.sources
+        ? changed(Object.keys(q.sources), q.sources)
+        : (q.factIds ?? []).some((id) => !h.factIds.includes(id) || !factById.has(id));
+      return stale ? { ...needsDetails(q, ["参考回答引用的事实已修改或无法确认，点「重新生成追问」更新"]), retryable: true } : q;
+    });
     return { ...h, questions };
   });
   // 旧版本（没有导出状态字段）按「追问答不上来」「核验失败」等旧规则剔除的句子：迁移为待重新核验，不直接放行

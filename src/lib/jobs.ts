@@ -383,7 +383,7 @@ export async function retryExperience(experienceId: string) {
       .filter((i) => {
         const h = next[i];
         if ((h.exportStatus ?? "ready") !== "ready") return false;
-        return h.qaFailed || h.questions.length === 0 || h.questions.some((q) => q.missingDetails?.some((m) => m.includes("引用的事实已修改")));
+        return h.qaFailed || h.questions.length === 0 || h.questions.some((q) => q.retryable);
       });
     if (needQA.length > 0) {
       let withQA: Highlight[];

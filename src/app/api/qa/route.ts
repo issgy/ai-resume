@@ -46,7 +46,7 @@ export async function POST(req: Request) {
         drafts.forEach(({ qa, i }, k) => {
           const v = verdicts?.get(k);
           if (!v) {
-            questions[i] = needsDetails(qa, ["参考回答未能完成核验，暂不展示；可以点「重试」"]);
+            questions[i] = { ...needsDetails(qa, ["参考回答核验请求失败，暂不展示；点「重新生成追问」重试"]), retryable: true };
           } else if (!verdictPasses(v)) {
             const bad = v.checks.filter((c) => !c.supported || c.conflict).map((c) => c.claim);
             questions[i] = needsDetails(qa, bad.length ? [`你的原话里没有：${bad.slice(0, 3).map((c) => `「${c}」`).join("")}`] : []);

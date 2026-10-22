@@ -196,9 +196,10 @@ export default function ResumePage() {
                       </div>
                       <div>
                         <div className="font-semibold text-slate-600">面试准备</div>
-                        {h.qaFailed && (
+                        {(h.qaFailed || h.questions.some((q) => q.retryable)) && (
                           <div className="mt-1 flex items-center gap-2 text-amber-800">
-                            面试追问生成出错（不影响这句简历）。{retryButton(h.experienceId, "重试这段")}
+                            {h.qaFailed ? "面试追问生成出错（不影响这句简历）。" : "部分参考回答需要更新（不影响这句简历）。"}
+                            {retryButton(h.experienceId, "重新生成追问")}
                           </div>
                         )}
                         {h.questions.map((q, j) => (

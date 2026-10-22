@@ -75,6 +75,8 @@ export type QA = {
   missingDetails?: string[];
   /** 参考回答所依据事实的原话快照；之后这些事实被改或删，回答即隐藏待重生成 */
   sources?: Record<string, string>;
+  /** 回答暂不可用是因为来源已修改或核验请求失败（可重试），而不是资料不足 */
+  retryable?: boolean;
 };
 
 /**
