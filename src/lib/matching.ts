@@ -254,7 +254,8 @@ function certTokens(s: string): string[] {
 
 /** 摘录里和这条要求对应的分句：按字的重合度挑选（年限数字、学历词优先对上） */
 function clauseFor(text: string, quote: string): string {
-  const parts = quote.split(/[，,；;。\n]/).map((p) => p.trim()).filter(Boolean);
+  // 顿号、括号、「但/且/并且/同时/需要」等也是分句边界（「学历不限、3年以上…」「3年以上…（有PMP证书者优先）」）
+  const parts = quote.split(/[，,；;。、\n（）()]|但是?|并且|而且|同时|且|需要|需/).map((p) => p.trim()).filter(Boolean);
   if (parts.length <= 1) return quote;
   const t = norm(text);
   const key = [...(text.match(/\d+|博士|硕士|本科|大专|专科/g) ?? [])];
@@ -333,9 +334,12 @@ export function normalizeMatch(raw: unknown, jd: string, experiences: Experience
     let normalized = text;
     const gateLike = requiredYears(text) !== null || UPPER_ONLY_RE.test(text) || isEducationRequirement(text);
     if (located && gateLike && (!gateInJd(text, norm(clause)) || boundOf(text) !== boundOf(clause))) normalized = clause;
-    // 原文写了「不要求/不限」的不是要求；写了「优先/加分」的不能当必需条件
-    if (located && /不要求|不限/.test(clause) && !/不限于/.test(clause)) return;
-    const optionalInJd = located && /优先|加分|更佳|为佳/.test(clause);
+    // 原文写了「不要求/不限」的不是要求；写了「优先/加分」的不能当必需条件。
+    // 只有能可靠定位到本要求所在分句（年限数字/学历词都在这个分句里）时才应用，定位不了就沿用模型的判断
+    const keys = normalized.match(/\d+|博士|硕士|本科|大专|专科/g) ?? [];
+    const reliable = located && (keys.length === 0 ? norm(clause).length <= norm(normalized).length + 12 : keys.every((k) => norm(clause).includes(k)));
+    if (reliable && /不要求|不限/.test(clause) && !/不限于/.test(clause)) return;
+    const optionalInJd = reliable && /优先|加分|更佳|为佳/.test(clause);
     let category = CATEGORIES.includes(r.category as RequirementCategory) ? (r.category as RequirementCategory) : "professional_ability";
     let ambiguity = str(r.ambiguity);
     if (!located && category === "hard_gate") {
