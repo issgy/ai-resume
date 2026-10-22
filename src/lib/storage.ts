@@ -7,6 +7,8 @@ export const KEYS = {
   profile: "air:profile",
   /** 教育背景 */
   education: "air:education",
+  /** 用户对能力推断的确认/拒绝（按能力 + 事实 + 原话快照记录，事实变了自动失效） */
+  abilityDecisions: "air:abilityDecisions",
   chat: "air:chat",
   match: "air:match",
   resume: "air:resume",

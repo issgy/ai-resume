@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { callLLMJson } from "@/lib/llm";
 import { sanitizeEducation } from "@/lib/education";
-import { checkRequirements } from "@/lib/match";
+import { normalizeMatch } from "@/lib/matching";
+import { isInstructionFact } from "@/lib/validate";
 import { MATCHER } from "@/lib/prompts";
 import type { Experience } from "@/lib/types";
 
@@ -17,28 +18,29 @@ export async function POST(req: Request) {
   const payload = experiences
     .filter((e) => e.facts.length > 0)
     .map((e) => ({
+      id: e.id,
       company: e.company,
       title: e.title,
       start: e.start,
       end: e.end,
-      facts: e.facts.map((f) => ({ id: f.id, text: f.text, source: f.source })),
+      // 资料里的指令或备注不作为候选人行为（R14）
+      facts: e.facts.filter((f) => !isInstructionFact(f)).map((f) => ({ id: f.id, text: f.text, source: f.source })),
     }));
   if (payload.length === 0) {
     return NextResponse.json({ error: "履历库还是空的，请先录入经历" }, { status: 400 });
   }
   const today = new Date().toISOString().slice(0, 7);
   try {
-    const data = await callLLMJson<{ requirements?: unknown }>([
+    const data = await callLLMJson<unknown>([
       { role: "system", content: MATCHER },
       { role: "user", content: `## 今天\n${today}\n\n## JD\n${jd}\n\n## 经历\n${JSON.stringify(payload)}` },
     ]);
-    // 模型的覆盖结论只能被代码降级：技术词、复合要求、年限逐条核对，结构异常按缺口处理
-    // 学历、专业类要求由程序按教育背景判断
-    const requirements = checkRequirements(data?.requirements, experiences, { education });
-    if (!requirements) {
-      return NextResponse.json({ error: "匹配结果格式异常，请重新分析" }, { status: 502 });
+    // 服务端校验 id、枚举和证据理由；学历、年限由程序判断（见 normalizeMatch）
+    const match = normalizeMatch(data, jd, experiences, education);
+    if (!match) {
+      return NextResponse.json({ error: "匹配结果格式异常（模型输出不完整），请重新分析" }, { status: 502 });
     }
-    return NextResponse.json({ requirements });
+    return NextResponse.json(match);
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
