@@ -97,7 +97,7 @@ export function checkWorkYears(
   experiences: Experience[],
   now = new Date(),
   text = "",
-): { coverage: Coverage; missing: string[]; experienceIds: string[] } {
+): { coverage: Coverage; missing: string[]; experienceIds: string[]; definite?: boolean } {
   // 能看出是实习、兼职、校园任职的不计入工作年限
   const jobs = experiences.filter((e) => e.title.trim() && !NON_FULLTIME_RE.test(`${e.company} ${e.title}`));
   if (jobs.length === 0) return { coverage: "none", missing: ["履历库里没有正式任职经历（实习、兼职、项目经历不计入）"], experienceIds: [] };
@@ -106,7 +106,7 @@ export function checkWorkYears(
   if (have === null) {
     return { coverage: "partial", missing: [`经历起止时间不完整，无法核实 ${years} 年工作年限`], experienceIds: ids };
   }
-  if (have < years) return { coverage: "none", missing: [`需要 ${years} 年以上，任职经历合计约 ${durationLabel(have)}`], experienceIds: ids };
+  if (have < years) return { coverage: "none", missing: [`需要 ${years} 年以上，任职经历合计约 ${durationLabel(have)}`], experienceIds: ids, definite: true };
   // 够年限，但程序看不出每段是不是全职（岗位名里不一定写「实习」）：要求明确写「全职」时最多部分覆盖
   if (/全职/.test(text)) {
     return { coverage: "partial", missing: ["无法确认以上经历均为全职，请自行核对"], experienceIds: ids };

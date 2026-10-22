@@ -68,7 +68,8 @@ function eduLevel(e: Education): number {
   return Math.max(0, ...levelsIn(e.degree || e.source));
 }
 
-export type EducationCheck = { coverage: Coverage; missing: string[]; educationIds: string[] };
+/** definite：能确定不满足（如明确写了更低学历）；资料没提供时为 false，按「材料未提到」处理 */
+export type EducationCheck = { coverage: Coverage; missing: string[]; educationIds: string[]; definite?: boolean };
 
 /**
  * 判断一条学历/专业要求（宁缺勿滥：不确定时最多 partial）：
@@ -95,6 +96,7 @@ export function checkEducation(text: string, education: Education[], now = new D
         coverage: "none",
         missing: [best > 0 ? `${LEVEL_NAME[need]}及以上学历（履历库最高为${LEVEL_NAME[best]}）` : `${LEVEL_NAME[need]}及以上学历（教育背景里没有写明学历）`],
         educationIds: [],
+        definite: best > 0,
       };
     }
     const done = meets.filter((e) => graduated(e, now));

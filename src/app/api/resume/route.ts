@@ -15,20 +15,30 @@ export async function POST(req: Request) {
   };
   // 匹配表来自浏览器存储：只取撰写需要的字段，事实 id 必须仍在履历库；状态只影响侧重，不放宽核验
   const facts = new Set(experiences.flatMap((e) => e.facts.map((f) => f.id)));
+  // 只把用户已确认的能力推断交给撰写（R09）；未确认的推断不进入简历
+  const confirmedList = (Array.isArray(abilities) ? (abilities as AbilityEvidence[]) : []).filter(
+    (a) => a?.confirmation === "confirmed" && Array.isArray(a.factIds) && a.factIds.every((id) => facts.has(id)),
+  );
+  const confirmedIds = new Set(confirmedList.map((a) => a.id));
+  const confirmed = confirmedList.map((a) => ({ ability: a.ability, factIds: a.factIds }));
+  const SUPPORTIVE = ["direct_support", "transferable_support", "expression_gap"];
   const matchTable = (Array.isArray(requirements) ? (requirements as Requirement[]) : [])
     .filter((r) => r && typeof r.text === "string")
-    .map((r) => ({
-      id: r.id,
-      text: r.text,
-      category: r.category,
-      status: r.status ?? r.coverage,
-      factIds: (Array.isArray(r.factIds) ? r.factIds : []).filter((id) => facts.has(id)),
-      missing: Array.isArray(r.missing) ? r.missing : [],
-    }));
-  // 只把用户已确认的能力推断交给撰写（R09）；未确认的推断不进入简历
-  const confirmed = (Array.isArray(abilities) ? (abilities as AbilityEvidence[]) : [])
-    .filter((a) => a?.confirmation === "confirmed" && Array.isArray(a.factIds) && a.factIds.every((id) => facts.has(id)))
-    .map((a) => ({ ability: a.ability, factIds: a.factIds }));
+    .map((r) => {
+      // 兜底：即使客户端传来的证据引用了未确认推断，也去掉；只靠它支持的要求按「需补证据」交给撰写
+      const evidence = (Array.isArray(r.evidence) ? r.evidence : [])
+        .map((e) => ({ factIds: (e.factIds ?? []).filter((id) => facts.has(id)), abilityIds: (e.abilityIds ?? []).filter((id) => confirmedIds.has(id)) }))
+        .filter((e) => e.factIds.length > 0 || e.abilityIds.length > 0);
+      const status = r.status ?? r.coverage;
+      return {
+        id: r.id,
+        text: r.text,
+        category: r.category,
+        status: r.evidence && SUPPORTIVE.includes(String(status)) && evidence.length === 0 ? "needs_evidence" : status,
+        factIds: r.evidence ? [...new Set(evidence.flatMap((e) => e.factIds))] : (Array.isArray(r.factIds) ? r.factIds : []).filter((id) => facts.has(id)),
+        missing: Array.isArray(r.missing) ? r.missing : [],
+      };
+    });
   const payload = experiences.map((e) => ({
     experienceId: e.id,
     company: e.company,

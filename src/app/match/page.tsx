@@ -7,7 +7,7 @@ import { Button, Card, ErrorText, PageHeader } from "@/components/ui";
 import { KEYS, useStored } from "@/lib/storage";
 import type { AbilityEvidence, Education, Experience, MatchResult, MatchStatus, Requirement, RequirementCategory } from "@/lib/types";
 import { educationLabel } from "@/lib/education";
-import { abilityKey, applyAbilityDecisions, fromLegacy } from "@/lib/matching";
+import { abilityKey, refreshMatch } from "@/lib/matching";
 import type { AbilityDecisions } from "@/lib/matching";
 import { attachResumeRedirect, experienceLabel, runMatch, runResume, useJobs } from "@/lib/jobs";
 
@@ -45,7 +45,7 @@ export default function MatchPage() {
   const currentJd = jd || stored?.jd || jdDraft;
   const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, { ...f, exp: e }] as const)));
   // 存下的结果按当前履历库和用户的推断确认记录重新整理（事实被删的证据去掉，被拒绝的推断不再支持要求）
-  const match = stored ? applyAbilityDecisions(fromLegacy(stored, experiences), decisions, experiences) : null;
+  const match = stored ? refreshMatch(stored, decisions, experiences, education) : null;
   const requirements: Requirement[] = match?.requirements ?? [];
   const abilities = match?.abilities ?? [];
   const abilityById = new Map(abilities.map((a) => [a.id, a]));
@@ -287,7 +287,7 @@ export default function MatchPage() {
           )}
 
           <div className="flex justify-end">
-            <Button variant="accent" className="!px-6 !py-3" onClick={() => runResume(match.jd, requirements, experiences, abilities)} disabled={!!loading}>
+            <Button variant="accent" className="!px-6 !py-3" onClick={() => stored && runResume(stored, experiences)} disabled={!!loading}>
               {loading === "resume"
                 ? "生成简历句中…"
                 : loading === "verify"

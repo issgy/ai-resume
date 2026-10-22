@@ -7,6 +7,8 @@ import { BULLET_RE, findSameExperience } from "@/lib/importText";
 import type { ImportResponse } from "@/lib/importText";
 import type { AbilityEvidence, Education, Experience, Highlight, MatchResult, Profile, Requirement, ResumeResult } from "@/lib/types";
 import { educationKey } from "@/lib/education";
+import { refreshMatch } from "@/lib/matching";
+import type { AbilityDecisions } from "@/lib/matching";
 import { checkHighlights, failQA, failVerification, markStale, norm } from "@/lib/validate";
 
 /**
@@ -294,11 +296,20 @@ async function generate(
   return { highlights: answered, dropped: [...data.dropped, ...verified.dropped], failedExperienceIds: data.failedExperienceIds ?? [] };
 }
 
-export async function runResume(jd: string, requirements: Requirement[], experiences: Experience[], abilities: AbilityEvidence[] = []) {
+/** 撰写专用匹配表：按当前履历、教育背景和推断确认记录重新推导；未确认的推断不作为依据（R09） */
+function writerInput(match: MatchResult | undefined, fallback: Requirement[], experiences: Experience[]) {
+  if (!match) return { requirements: fallback, abilities: [] as AbilityEvidence[] };
+  const w = refreshMatch(match, read<AbilityDecisions>(KEYS.abilityDecisions, {}), experiences, read<Education[]>(KEYS.education, []), { writer: true });
+  return { requirements: w.requirements, abilities: (w.abilities ?? []).filter((a) => a.confirmation === "confirmed") };
+}
+
+export async function runResume(match: MatchResult, experiences: Experience[]) {
   if (state.resume) return;
   update({ resume: "resume", error: "", notice: null });
   markPending("resume", true);
   try {
+    const jd = match.jd;
+    const { requirements, abilities } = writerInput(match, match.requirements, experiences);
     const data = await generate(jd, requirements, experiences, (stage) => update({ resume: stage }), abilities);
     const resume: ResumeResult = {
       jd,
@@ -309,6 +320,7 @@ export async function runResume(jd: string, requirements: Requirement[], experie
       provenanceChecked: true,
       requirements,
       abilities,
+      match,
     };
     writeStored(KEYS.resume, resume);
     if (onResumeDone) {
@@ -346,8 +358,9 @@ export async function retryExperience(experienceId: string) {
     const writerFailed = (latest.failedExperienceIds ?? []).includes(experienceId) || own.length === 0;
 
     if (writerFailed) {
-      const requirements = latest.requirements ?? read<{ requirements: Requirement[] } | null>(KEYS.match, null)?.requirements ?? [];
-      const data = await generate(latest.jd, requirements, [exp], () => {}, latest.abilities ?? []);
+      // 按当前确认记录和履历重新推导：撤销或已失效的推断不会再被用上
+      const { requirements, abilities } = writerInput(latest.match, latest.requirements ?? [], experiences);
+      const data = await generate(latest.jd, requirements, [exp], () => {}, abilities);
       if (data.highlights.length === 0) {
         update({ retrying: null, retryError: `「${label}」仍未生成成功（模型请求出错或没有返回内容），已保留原状，可以稍后再试` });
         return;

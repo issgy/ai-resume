@@ -90,6 +90,9 @@ export type Requirement = {
   status?: MatchStatus;
   evidence?: Evidence[];
   hardGate?: HardGateResult;
+  /** 模型最初的判断（状态与缺失点）：每次按当前证据重新推导时作参考 */
+  modelStatus?: MatchStatus;
+  modelMissing?: string[];
   text: string;
   type: "must" | "nice";
   factIds: string[];
@@ -168,6 +171,8 @@ export type MatchResult = {
   experienceCoverage?: { experienceId: string; requirementIds: string[]; reason: string }[];
   /** 最多五个最影响结果的补充问题 */
   questions?: string[];
+  /** 分析时各事实的原话快照：事实之后被修改，引用它的证据失效待重新分析 */
+  factSources?: Record<string, string>;
 };
 
 export type ResumeResult = {
@@ -185,4 +190,6 @@ export type ResumeResult = {
   requirements?: Requirement[];
   /** 生成时的能力推断（含确认状态） */
   abilities?: AbilityEvidence[];
+  /** 生成时的完整匹配结果：局部重试时按当前履历和确认记录重新推导撰写用匹配表 */
+  match?: MatchResult;
 };
