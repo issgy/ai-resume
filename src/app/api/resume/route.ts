@@ -111,16 +111,21 @@ export async function POST(req: Request) {
       throw (first as PromiseRejectedResult | undefined)?.reason ?? new Error("没有可生成的经历");
     }
     // 一致性：直接或可迁移支持了必需要求的句子至少算「次相关」，不能只作为可选内容（S5：相关且有支持的内容优先）
-    const coreSupported = new Set(
-      matchTable.filter((r) => r.id && ["direct_support", "transferable_support", "expression_gap"].includes(String(r.status)) && r.category !== "bonus").map((r) => r.id!),
+    // 只看「直接支持」必需的职责/专业能力/硬性条件；可迁移的软能力支持不强制放进简历
+    const coreSupported = new Map(
+      matchTable
+        .filter((r) => r.id && r.status === "direct_support" && ["core_responsibility", "professional_ability", "hard_gate"].includes(String(r.category)))
+        .map((r) => [r.id!, r.text]),
     );
     for (const h of raw) {
       if (h.selection === "optional" && (h.requirementIds ?? []).some((id) => coreSupported.has(id))) h.selection = "condensed";
     }
     for (const d of dispositions) {
-      if (d.level === "optional" && raw.some((h) => h.experienceId === d.experienceId && h.selection !== "optional")) {
+      const lifted = raw.filter((h) => h.experienceId === d.experienceId && h.selection !== "optional");
+      if (d.level === "optional" && lifted.length > 0) {
+        const req = lifted.flatMap((h) => h.requirementIds ?? []).map((id) => coreSupported.get(id)).find(Boolean);
         d.level = "condensed";
-        d.reason = `${d.reason}（这段经历支持了岗位的必需要求，至少保留一条）`;
+        d.reason = `直接支持岗位必需要求${req ? `「${req}」` : ""}，至少保留一条`;
       }
     }
     // 这里只写简历句；问答在核验通过后由 /api/qa 生成
