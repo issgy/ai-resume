@@ -7,7 +7,7 @@ import { BULLET_RE, findSameExperience } from "@/lib/importText";
 import type { ImportResponse } from "@/lib/importText";
 import type { Education, Experience, Highlight, Profile, Requirement, ResumeResult } from "@/lib/types";
 import { educationKey } from "@/lib/education";
-import { failQA, failVerification, norm } from "@/lib/validate";
+import { checkHighlights, failQA, failVerification, markStale, norm } from "@/lib/validate";
 
 /**
  * 「粘贴简历导入」「分析匹配」「生成定向简历」的后台任务。
@@ -319,29 +319,87 @@ export async function runResume(jd: string, requirements: Requirement[], experie
 }
 
 /**
- * 局部重试（T14）：只重新生成一段经历，其他经历已完成的结果原样保留；替换这段经历原有的句子，不重复插入。
- * 用于撰写失败、核验失败、来源已修改待重验、面试准备失败。
+ * 局部重试（T14）：只处理一段经历，只重跑出问题的阶段，其他经历和这段里已通过的句子原样保留（按位置原地替换，不重复插入）。
+ * - 这段撰写失败或还没有句子 → 重新撰写整段；新结果为空时保留原状并提示
+ * - 待处理的句子（模型出错、来源已修改、旧版本剔除）→ 用当前履历事实重新核验这些句子
+ * - 面试准备失败、参考回答来源已修改、本次刚通过核验的句子 → 只重新生成面试准备
  */
 export async function retryExperience(experienceId: string) {
   if (state.resume || state.retrying) return;
-  const resume = read<ResumeResult | null>(KEYS.resume, null);
-  const exp = read<Experience[]>(KEYS.experiences, []).find((e) => e.id === experienceId);
-  if (!resume || !exp) return;
-  const requirements = resume.requirements ?? read<{ requirements: Requirement[] } | null>(KEYS.match, null)?.requirements ?? [];
+  const stored = read<ResumeResult | null>(KEYS.resume, null);
+  const experiences = read<Experience[]>(KEYS.experiences, []);
+  const exp = experiences.find((e) => e.id === experienceId);
+  if (!stored || !exp) return;
   update({ retrying: experienceId, retryError: "" });
+  const label = experienceLabel(exp);
   try {
-    const data = await generate(resume.jd, requirements, [exp], () => {});
-    const latest = read<ResumeResult | null>(KEYS.resume, null) ?? resume;
-    const next: ResumeResult = {
-      ...latest,
-      highlights: [...latest.highlights.filter((h) => h.experienceId !== experienceId), ...data.highlights],
-      dropped: [...latest.dropped.filter((d) => d.experienceId !== experienceId), ...data.dropped],
-      failedExperienceIds: [...(latest.failedExperienceIds ?? []).filter((id) => id !== experienceId), ...(data.failedExperienceIds ?? [])],
-    };
-    writeStored(KEYS.resume, next);
+    // 先按当前履历库标出过期句子、迁移旧版本剔除项，再在此基础上处理
+    const latest = markStale(stored, experiences);
+    const own = latest.highlights.map((h, i) => ({ h, i })).filter(({ h }) => h.experienceId === experienceId);
+    const writerFailed = (latest.failedExperienceIds ?? []).includes(experienceId) || own.length === 0;
+
+    if (writerFailed) {
+      const requirements = latest.requirements ?? read<{ requirements: Requirement[] } | null>(KEYS.match, null)?.requirements ?? [];
+      const data = await generate(latest.jd, requirements, [exp], () => {});
+      if (data.highlights.length === 0) {
+        update({ retrying: null, retryError: `「${label}」仍未生成成功（模型请求出错或没有返回内容），已保留原状，可以稍后再试` });
+        return;
+      }
+      writeStored(KEYS.resume, {
+        ...latest,
+        highlights: [...latest.highlights.filter((h) => h.experienceId !== experienceId), ...data.highlights],
+        dropped: [...latest.dropped.filter((d) => d.experienceId !== experienceId), ...data.dropped],
+        failedExperienceIds: (latest.failedExperienceIds ?? []).filter((id) => id !== experienceId),
+      });
+      update({ retrying: null });
+      return;
+    }
+
+    const next = [...latest.highlights];
+    // 1) 重新核验待处理的句子（用当前事实刷新来源快照；所引事实都已删除的标为 blocked）
+    const toVerify = own.filter(({ h }) => h.exportStatus === "pending");
+    if (toVerify.length > 0) {
+      const refreshed = toVerify.map(({ h }) => {
+        const { kept } = checkHighlights([{ experienceId, text: h.text, factIds: h.factIds.filter((id) => exp.facts.some((f) => f.id === id)), questions: [] }], [exp]);
+        return kept[0] ?? null;
+      });
+      const verifiable = refreshed.filter((h): h is Highlight => !!h);
+      let verified: Highlight[] = [];
+      try {
+        verified = (await postJson<{ highlights: Highlight[] }>("/api/verify", { highlights: verifiable, experiences: [exp] })).highlights;
+      } catch {
+        verified = failVerification(verifiable);
+      }
+      let k = 0;
+      toVerify.forEach(({ h, i }, j) => {
+        next[i] = refreshed[j]
+          ? (verified[k++] ?? refreshed[j]!)
+          : { ...h, exportStatus: "blocked", issueType: "unsupported_assertion", note: "引用的履历事实都已删除，这句不再有来源" };
+      });
+    }
+    // 2) 只为需要的句子重新生成面试准备
+    const needQA = own
+      .map(({ i }) => i)
+      .filter((i) => {
+        const h = next[i];
+        if ((h.exportStatus ?? "ready") !== "ready") return false;
+        return h.qaFailed || h.questions.length === 0 || h.questions.some((q) => q.missingDetails?.some((m) => m.includes("引用的事实已修改")));
+      });
+    if (needQA.length > 0) {
+      let withQA: Highlight[];
+      try {
+        withQA = (await postJson<{ highlights: Highlight[] }>("/api/qa", { jd: latest.jd, highlights: needQA.map((i) => next[i]), experiences: [exp] })).highlights;
+      } catch {
+        withQA = failQA(needQA.map((i) => next[i]));
+      }
+      needQA.forEach((i, j) => {
+        next[i] = withQA[j] ?? next[i];
+      });
+    }
+    writeStored(KEYS.resume, { ...latest, highlights: next });
     update({ retrying: null });
   } catch (e) {
-    update({ retrying: null, retryError: `「${experienceLabel(exp)}」重试失败：${(e as Error).message}` });
+    update({ retrying: null, retryError: `「${label}」重试失败：${(e as Error).message}，已保留原状` });
   }
 }
 

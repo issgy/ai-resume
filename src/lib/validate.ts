@@ -46,15 +46,18 @@ export function ruleIssues(text: string, facts: Pick<Fact, "text" | "source">[])
 export function fallbackText(facts: Pick<Fact, "source">[]): string {
   return facts
     .filter((f) => !isInstructionFact(f))
-    .map((f) =>
-      f.source
-        .trim()
-        .replace(/^\s*(?:[-–—*•·●]\s*|\d{1,2}[.．、)）]\s*)/, "")
-        .replace(/(^|[，,；;。])\s*我(?=[\u4e00-\u9fa5])/g, "$1")
-        .replace(/[。；;，,\s]+$/, ""),
-    )
+    .map((f) => tidyBullet(f.source))
     .filter(Boolean)
     .join("；");
+}
+
+/** 简历句的格式整理：去行首项目符号、句首人称「我」、句末标点；不增删任何内容 */
+export function tidyBullet(s: string): string {
+  return s
+    .trim()
+    .replace(/^\s*(?:[-–—*•·●]\s*|\d{1,2}[.．、)）]\s*)/, "")
+    .replace(/(^|[，,；;。])\s*我(?=[\u4e00-\u9fa5])/g, "$1")
+    .replace(/[。；;，,\s]+$/, "");
 }
 
 /**
@@ -112,7 +115,8 @@ export function parseVerifyResults(results: unknown, count: number): Map<number,
     const { index, checks, revised_text, issue_type } = r as Record<string, unknown>;
     if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= count || seen.has(index)) return null;
     seen.add(index);
-    if (!Array.isArray(checks)) continue;
+    // 必须给出非空断言列表，且显式给出 issue_type（null 也要写出）；缺失按技术错误处理，不能默认通过
+    if (!Array.isArray(checks) || checks.length === 0 || !("issue_type" in (r as object))) continue;
     const parsed: AssertionCheck[] = [];
     let ok = true;
     for (const c of checks) {
@@ -134,7 +138,7 @@ export function parseVerifyResults(results: unknown, count: number): Map<number,
       });
     }
     if (!ok) continue;
-    const issue = issue_type === "unsupported_assertion" || issue_type === "source_conflict" ? issue_type : issue_type == null ? null : undefined;
+    const issue = issue_type === "unsupported_assertion" || issue_type === "source_conflict" ? issue_type : issue_type === null ? null : undefined;
     if (issue === undefined) continue;
     out.set(index, { checks: parsed, revised: typeof revised_text === "string" ? revised_text.trim() : "", issue });
   }
@@ -226,12 +230,36 @@ export function isExportable(h: Highlight, resume: Pick<ResumeResult, "provenanc
 export function markStale(resume: ResumeResult, experiences: Experience[]): ResumeResult {
   if (!resume.provenanceChecked) return resume;
   const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, f] as const)));
+  const changed = (ids: string[], snap: Record<string, string> | undefined) =>
+    ids.some((id) => snap?.[id] === undefined || factById.get(id)?.source !== snap?.[id]);
   const highlights = resume.highlights.map((h) => {
-    const stale =
-      h.factIds.length === 0 || h.factIds.some((id) => h.sources?.[id] === undefined || factById.get(id)?.source !== h.sources?.[id]);
-    return stale
-      ? { ...h, exportStatus: "pending" as const, issueType: "stale" as const, note: "引用的履历事实在生成后被修改或删除，需要重新核验" }
-      : h;
+    if (h.factIds.length === 0 || changed(h.factIds, h.sources)) {
+      return { ...h, exportStatus: "pending" as const, issueType: "stale" as const, note: "引用的履历事实在生成后被修改或删除，需要重新核验" };
+    }
+    // 参考回答可能引用了简历句之外的事实：这些事实变了，只隐藏受影响的回答（R13、T12）
+    const questions = h.questions.map((q) =>
+      !isInsufficient(q) && q.sources && changed(Object.keys(q.sources), q.sources)
+        ? needsDetails(q, ["参考回答引用的事实已修改，请重试这段以重新生成"])
+        : q,
+    );
+    return { ...h, questions };
   });
-  return { ...resume, highlights };
+  // 旧版本（没有导出状态字段）按「追问答不上来」「核验失败」等旧规则剔除的句子：迁移为待重新核验，不直接放行
+  const legacy = !resume.highlights.some((h) => h.exportStatus);
+  const migrated: Highlight[] = legacy
+    ? resume.dropped
+        .filter((d) => d.experienceId && d.factIds?.length && d.factIds.every((id) => factById.has(id)))
+        .map((d) => ({
+          experienceId: d.experienceId!,
+          text: d.text,
+          factIds: d.factIds!,
+          questions: [],
+          sources: {},
+          exportStatus: "pending" as const,
+          issueType: "stale" as const,
+          note: `旧版本按以前的规则未写入（${d.reason}），可以点「重试这段」重新核验`,
+        }))
+    : [];
+  const dropped = legacy ? resume.dropped.filter((d) => !migrated.some((m) => m.text === d.text && m.experienceId === d.experienceId)) : resume.dropped;
+  return { ...resume, highlights: [...highlights, ...migrated], dropped };
 }

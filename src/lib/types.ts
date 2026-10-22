@@ -73,6 +73,8 @@ export type QA = {
   preparationStatus?: "ready" | "needs_details";
   /** 回答这道题还缺的具体细节 */
   missingDetails?: string[];
+  /** 参考回答所依据事实的原话快照；之后这些事实被改或删，回答即隐藏待重生成 */
+  sources?: Record<string, string>;
 };
 
 /**

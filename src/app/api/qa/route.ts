@@ -53,7 +53,11 @@ export async function POST(req: Request) {
           }
         });
       }
-      return { ...h, questions: pickQuestions(questions), qaFailed: false };
+      // 每个回答保存所依据事实的原话快照，事实之后被修改时可单独失效
+      const withSources = questions.map((qa) =>
+        isInsufficient(qa) ? qa : { ...qa, sources: Object.fromEntries(exp.facts.filter((f) => (qa.factIds ?? []).includes(f.id)).map((f) => [f.id, f.source])) },
+      );
+      return { ...h, questions: pickQuestions(withSources), qaFailed: false };
     }),
   );
 
