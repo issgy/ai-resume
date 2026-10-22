@@ -3,7 +3,7 @@ import { callLLMJson } from "@/lib/llm";
 import { WRITER } from "@/lib/prompts";
 import { sanitizeEducation } from "@/lib/education";
 import { checkRequirements } from "@/lib/match";
-import { checkHighlights } from "@/lib/validate";
+import { checkHighlights, isInstructionFact } from "@/lib/validate";
 import type { Experience, Highlight } from "@/lib/types";
 
 export const maxDuration = 60;
@@ -22,7 +22,8 @@ export async function POST(req: Request) {
     experienceId: e.id,
     company: e.company,
     title: e.title,
-    facts: e.facts.map((f) => ({ id: f.id, text: f.text, source: f.source })),
+    // 资料里的指令或备注标出来，撰写时不当作经历使用（R14）
+    facts: e.facts.map((f) => ({ id: f.id, text: f.text, source: f.source, ...(isInstructionFact(f) ? { isInstruction: true } : {}) })),
   }));
   try {
     // 每段经历单独并行生成，且只输出亮点（不含面试问答）：单次输出更短，总耗时约等于最慢的一段，避免超时

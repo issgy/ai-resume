@@ -5,9 +5,9 @@ import { postJson } from "@/components/ui";
 import { KEYS, read, uid, writeStored } from "@/lib/storage";
 import { BULLET_RE, findSameExperience } from "@/lib/importText";
 import type { ImportResponse } from "@/lib/importText";
-import type { Education, Experience, Profile, Requirement, ResumeResult } from "@/lib/types";
+import type { Education, Experience, Highlight, Profile, Requirement, ResumeResult } from "@/lib/types";
 import { educationKey } from "@/lib/education";
-import { failQA, failVerification, norm } from "@/lib/validate";
+import { checkHighlights, failQA, failVerification, markStale, norm } from "@/lib/validate";
 
 /**
  * 「粘贴简历导入」「分析匹配」「生成定向简历」的后台任务。
@@ -50,6 +50,10 @@ export type JobsState = {
   importSummary: ImportSummary | null;
   /** 用户不在任务所属页面时的完成/失败提示，显示在顶部导航 */
   notice: Notice | null;
+  /** 正在局部重试的经历 id */
+  retrying: string | null;
+  /** 最近一次局部重试的失败原因 */
+  retryError: string;
 };
 
 const PENDING_KEY = (kind: JobKind) => `air:job:${kind}`;
@@ -60,7 +64,7 @@ const INTERRUPTED: Record<JobKind, string> = {
 };
 const HREF: Record<JobKind, string> = { import: "/collect", match: "/match", resume: "/match" };
 
-const SERVER_STATE: JobsState = { import: null, match: null, resume: null, error: "", importError: "", importSummary: null, notice: null };
+const SERVER_STATE: JobsState = { import: null, match: null, resume: null, error: "", importError: "", importSummary: null, notice: null, retrying: null, retryError: "" };
 let state: JobsState = SERVER_STATE;
 let initialized = false;
 const listeners = new Set<() => void>();
@@ -248,39 +252,56 @@ export async function runMatch(jd: string, experiences: Experience[]) {
   }
 }
 
+type Generated = Pick<ResumeResult, "highlights" | "dropped" | "failedExperienceIds">;
+
+/**
+ * 撰写 → 逐句核验 → 面试准备。各阶段失败都按技术错误处理（02 S6、T14）：
+ * - 撰写整体失败：抛错（没有任何结果可保留）；单段失败记入 failedExperienceIds，可单独重试
+ * - 核验失败：句子保留为 pending + technical_error，不导出、可重试，不判成「找不到依据」
+ * - 面试准备失败：只标记 qaFailed，不影响句子导出
+ */
+async function generate(jd: string, requirements: Requirement[], experiences: Experience[], onStage: (s: "verify" | "qa") => void): Promise<Generated> {
+  const data = await postJson<Generated>("/api/resume", { jd, requirements, experiences, education: read<Education[]>(KEYS.education, []) });
+  let verified: Pick<ResumeResult, "highlights" | "dropped"> = { highlights: [], dropped: [] };
+  if (data.highlights.length > 0) {
+    onStage("verify");
+    try {
+      verified = await postJson<Pick<ResumeResult, "highlights" | "dropped">>("/api/verify", { highlights: data.highlights, experiences });
+    } catch {
+      verified = { highlights: failVerification(data.highlights), dropped: [] };
+    }
+  }
+  let answered = verified.highlights;
+  const ready = verified.highlights.filter((h) => (h.exportStatus ?? "ready") === "ready");
+  if (ready.length > 0) {
+    onStage("qa");
+    let withQA: Highlight[];
+    try {
+      withQA = (await postJson<{ highlights: Highlight[] }>("/api/qa", { jd, highlights: ready, experiences })).highlights;
+    } catch {
+      withQA = failQA(ready);
+    }
+    // 按顺序把面试准备结果放回原位置，非 ready 的句子原样保留
+    let k = 0;
+    answered = verified.highlights.map((h) => ((h.exportStatus ?? "ready") === "ready" ? (withQA[k++] ?? h) : h));
+  }
+  return { highlights: answered, dropped: [...data.dropped, ...verified.dropped], failedExperienceIds: data.failedExperienceIds ?? [] };
+}
+
 export async function runResume(jd: string, requirements: Requirement[], experiences: Experience[]) {
   if (state.resume) return;
   update({ resume: "resume", error: "", notice: null });
   markPending("resume", true);
   try {
-    const data = await postJson<Pick<ResumeResult, "highlights" | "dropped" | "failedExperienceIds">>("/api/resume", { jd, requirements, experiences, education: read<Education[]>(KEYS.education, []) });
-    // 规则校验通过的亮点再做一次大模型内容核验；核验请求整体失败时这批亮点全部剔除，不放行未核验内容
-    let verified: Pick<ResumeResult, "highlights" | "dropped"> = { highlights: [], dropped: [] };
-    if (data.highlights.length > 0) {
-      update({ resume: "verify" });
-      try {
-        verified = await postJson<Pick<ResumeResult, "highlights" | "dropped">>("/api/verify", { highlights: data.highlights, experiences });
-      } catch {
-        verified = { highlights: [], dropped: failVerification(data.highlights) };
-      }
-    }
-    // 只给核验通过的亮点生成面试问答；问答请求整体失败时这批亮点同样全部剔除，回答不可信的亮点由 /api/qa 剔除
-    let answered: Pick<ResumeResult, "highlights" | "dropped"> = { highlights: [], dropped: [] };
-    if (verified.highlights.length > 0) {
-      update({ resume: "qa" });
-      try {
-        answered = await postJson<Pick<ResumeResult, "highlights" | "dropped">>("/api/qa", { jd, highlights: verified.highlights, experiences });
-      } catch {
-        answered = { highlights: [], dropped: failQA(verified.highlights) };
-      }
-    }
+    const data = await generate(jd, requirements, experiences, (stage) => update({ resume: stage }));
     const resume: ResumeResult = {
       jd,
-      highlights: answered.highlights,
-      dropped: [...data.dropped, ...verified.dropped, ...answered.dropped],
+      highlights: data.highlights,
+      dropped: data.dropped,
       failedExperienceIds: data.failedExperienceIds ?? [],
-      // 只有上面核验通过的 highlights 会被导出；简历页不会把未核验的履历事实写进正文
+      // 只有 exportStatus 为 ready 的句子会被导出
       provenanceChecked: true,
+      requirements,
     };
     writeStored(KEYS.resume, resume);
     if (onResumeDone) {
@@ -295,4 +316,94 @@ export async function runResume(jd: string, requirements: Requirement[], experie
   } finally {
     markPending("resume", false);
   }
+}
+
+/**
+ * 局部重试（T14）：只处理一段经历，只重跑出问题的阶段，其他经历和这段里已通过的句子原样保留（按位置原地替换，不重复插入）。
+ * - 这段撰写失败或还没有句子 → 重新撰写整段；新结果为空时保留原状并提示
+ * - 待处理的句子（模型出错、来源已修改、旧版本剔除）→ 用当前履历事实重新核验这些句子
+ * - 面试准备失败、参考回答来源已修改、本次刚通过核验的句子 → 只重新生成面试准备
+ */
+export async function retryExperience(experienceId: string) {
+  if (state.resume || state.retrying) return;
+  const stored = read<ResumeResult | null>(KEYS.resume, null);
+  const experiences = read<Experience[]>(KEYS.experiences, []);
+  const exp = experiences.find((e) => e.id === experienceId);
+  if (!stored || !exp) return;
+  update({ retrying: experienceId, retryError: "" });
+  const label = experienceLabel(exp);
+  try {
+    // 先按当前履历库标出过期句子、迁移旧版本剔除项，再在此基础上处理
+    const latest = markStale(stored, experiences);
+    const own = latest.highlights.map((h, i) => ({ h, i })).filter(({ h }) => h.experienceId === experienceId);
+    const writerFailed = (latest.failedExperienceIds ?? []).includes(experienceId) || own.length === 0;
+
+    if (writerFailed) {
+      const requirements = latest.requirements ?? read<{ requirements: Requirement[] } | null>(KEYS.match, null)?.requirements ?? [];
+      const data = await generate(latest.jd, requirements, [exp], () => {});
+      if (data.highlights.length === 0) {
+        update({ retrying: null, retryError: `「${label}」仍未生成成功（模型请求出错或没有返回内容），已保留原状，可以稍后再试` });
+        return;
+      }
+      writeStored(KEYS.resume, {
+        ...latest,
+        highlights: [...latest.highlights.filter((h) => h.experienceId !== experienceId), ...data.highlights],
+        dropped: [...latest.dropped.filter((d) => d.experienceId !== experienceId), ...data.dropped],
+        failedExperienceIds: (latest.failedExperienceIds ?? []).filter((id) => id !== experienceId),
+      });
+      update({ retrying: null });
+      return;
+    }
+
+    const next = [...latest.highlights];
+    // 1) 重新核验待处理的句子（用当前事实刷新来源快照；所引事实都已删除的标为 blocked）
+    const toVerify = own.filter(({ h }) => h.exportStatus === "pending");
+    if (toVerify.length > 0) {
+      const refreshed = toVerify.map(({ h }) => {
+        const { kept } = checkHighlights([{ experienceId, text: h.text, factIds: h.factIds.filter((id) => exp.facts.some((f) => f.id === id)), questions: [] }], [exp]);
+        return kept[0] ?? null;
+      });
+      const verifiable = refreshed.filter((h): h is Highlight => !!h);
+      let verified: Highlight[] = [];
+      try {
+        verified = (await postJson<{ highlights: Highlight[] }>("/api/verify", { highlights: verifiable, experiences: [exp] })).highlights;
+      } catch {
+        verified = failVerification(verifiable);
+      }
+      let k = 0;
+      toVerify.forEach(({ h, i }, j) => {
+        next[i] = refreshed[j]
+          ? (verified[k++] ?? refreshed[j]!)
+          : { ...h, exportStatus: "blocked", issueType: "unsupported_assertion", note: "引用的履历事实都已删除，这句不再有来源" };
+      });
+    }
+    // 2) 只为需要的句子重新生成面试准备
+    const needQA = own
+      .map(({ i }) => i)
+      .filter((i) => {
+        const h = next[i];
+        if ((h.exportStatus ?? "ready") !== "ready") return false;
+        return h.qaFailed || h.questions.length === 0 || h.questions.some((q) => q.retryable);
+      });
+    if (needQA.length > 0) {
+      let withQA: Highlight[];
+      try {
+        withQA = (await postJson<{ highlights: Highlight[] }>("/api/qa", { jd: latest.jd, highlights: needQA.map((i) => next[i]), experiences: [exp] })).highlights;
+      } catch {
+        withQA = failQA(needQA.map((i) => next[i]));
+      }
+      needQA.forEach((i, j) => {
+        next[i] = withQA[j] ?? next[i];
+      });
+    }
+    writeStored(KEYS.resume, { ...latest, highlights: next });
+    update({ retrying: null });
+  } catch (e) {
+    update({ retrying: null, retryError: `「${label}」重试失败：${(e as Error).message}，已保留原状` });
+  }
+}
+
+/** 经历在提示里的名字：公司 · 岗位；都为空时不显示孤零零的「·」 */
+export function experienceLabel(e: Pick<Experience, "company" | "title">): string {
+  return [e.company.trim(), e.title.trim()].filter(Boolean).join(" · ") || "未命名经历（未归类内容）";
 }
