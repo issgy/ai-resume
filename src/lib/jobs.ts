@@ -373,13 +373,15 @@ export async function retryExperience(experienceId: string) {
         update({ retrying: null, retryError: `「${label}」仍未生成成功（模型请求出错或没有返回内容），已保留原状，可以稍后再试` });
         return;
       }
+      const cur = read<ResumeResult | null>(KEYS.resume, null);
+      const base = cur ? markStale(cur, read<Experience[]>(KEYS.experiences, experiences)) : latest;
       writeStored(KEYS.resume, {
-        ...latest,
-        highlights: [...latest.highlights.filter((h) => h.experienceId !== experienceId), ...data.highlights],
-        dropped: [...latest.dropped.filter((d) => d.experienceId !== experienceId), ...data.dropped],
-        failedExperienceIds: (latest.failedExperienceIds ?? []).filter((id) => id !== experienceId),
-        dispositions: [...(latest.dispositions ?? []).filter((d) => d.experienceId !== experienceId), ...(data.dispositions ?? [])],
-        unused: [...(latest.unused ?? []).filter((u) => u.experienceId !== experienceId), ...(data.unused ?? [])],
+        ...base,
+        highlights: [...base.highlights.filter((h) => h.experienceId !== experienceId), ...data.highlights],
+        dropped: [...base.dropped.filter((d) => d.experienceId !== experienceId), ...data.dropped],
+        failedExperienceIds: (base.failedExperienceIds ?? []).filter((id) => id !== experienceId),
+        dispositions: [...(base.dispositions ?? []).filter((d) => d.experienceId !== experienceId), ...(data.dispositions ?? [])],
+        unused: [...(base.unused ?? []).filter((u) => u.experienceId !== experienceId), ...(data.unused ?? [])],
       });
       update({ retrying: null });
       return;
@@ -391,7 +393,7 @@ export async function retryExperience(experienceId: string) {
     if (toVerify.length > 0) {
       const refreshed = toVerify.map(({ h }) => {
         const { kept } = checkHighlights([{ experienceId, text: h.text, factIds: h.factIds.filter((id) => exp.facts.some((f) => f.id === id)), questions: [] }], [exp]);
-        return kept[0] ?? null;
+        return kept[0] ? keepLayout(kept[0], h) : null;
       });
       const verifiable = refreshed.filter((h): h is Highlight => !!h);
       let verified: Highlight[] = [];
@@ -403,7 +405,7 @@ export async function retryExperience(experienceId: string) {
       let k = 0;
       toVerify.forEach(({ h, i }, j) => {
         next[i] = refreshed[j]
-          ? (verified[k++] ?? refreshed[j]!)
+          ? keepLayout(verified[k++] ?? refreshed[j]!, h)
           : { ...h, exportStatus: "blocked", issueType: "unsupported_assertion", note: "引用的履历事实都已删除，这句不再有来源" };
       });
     }
@@ -423,14 +425,26 @@ export async function retryExperience(experienceId: string) {
         withQA = failQA(needQA.map((i) => next[i]));
       }
       needQA.forEach((i, j) => {
-        next[i] = withQA[j] ?? next[i];
+        next[i] = keepLayout(withQA[j] ?? next[i], next[i]);
       });
     }
-    writeStored(KEYS.resume, { ...latest, highlights: next });
+    // 结果落盘时以最新存储为准：只替换本段经历的核验/问答结果，保留请求期间用户做的移出/放回
+    const now = read<ResumeResult | null>(KEYS.resume, null);
+    const base = now && now.highlights.length === latest.highlights.length ? markStale(now, read<Experience[]>(KEYS.experiences, experiences)) : latest;
+    const ownIdx = new Set(own.map(({ i }) => i));
+    writeStored(KEYS.resume, {
+      ...base,
+      highlights: base.highlights.map((h, i) => (ownIdx.has(i) && h.text === latest.highlights[i].text ? { ...next[i], selection: h.selection } : h)),
+    });
     update({ retrying: null });
   } catch (e) {
     update({ retrying: null, retryError: `「${label}」重试失败：${(e as Error).message}，已保留原状` });
   }
+}
+
+/** 重新核验 / 生成面试准备后保留编排字段（选入状态、对应要求），否则低相关或已移出的句子会重新进入导出 */
+function keepLayout(h: Highlight, prev: Highlight): Highlight {
+  return { ...h, selection: prev.selection, requirementIds: prev.requirementIds ?? h.requirementIds };
 }
 
 /** 把一句放进简历或移出简历（选材可恢复，不删除内容；02 R10、T15） */
