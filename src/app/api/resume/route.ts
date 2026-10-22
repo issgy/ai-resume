@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 import { callLLMJson } from "@/lib/llm";
 import { WRITER } from "@/lib/prompts";
-import { checkHighlights, isInstructionFact } from "@/lib/validate";
-import type { AbilityEvidence, Experience, Highlight, Requirement } from "@/lib/types";
+import { checkHighlights, isInstructionFact, tidyBullet } from "@/lib/validate";
+import type { AbilityEvidence, Disposition, Experience, Highlight, Requirement, Selection, UnusedFact } from "@/lib/types";
+
+const SELECTIONS: Selection[] = ["expanded", "condensed", "optional"];
+const LEVELS: Disposition["level"][] = ["expanded", "condensed", "optional"];
 
 export const maxDuration = 60;
 
@@ -55,31 +58,73 @@ export async function POST(req: Request) {
     const targets = payload.filter((p) => p.facts.length > 0);
     const results = await Promise.allSettled(
       targets.map((p) =>
-        callLLMJson<{ highlights: Highlight[] }>([
+        callLLMJson<unknown>([
           { role: "system", content: WRITER },
           {
             role: "user",
-            content: `## JD\n${jd}\n\n## 匹配表\n${JSON.stringify(matchTable)}\n\n## 用户已确认的能力（只能写对应的具体行为）\n${JSON.stringify(confirmed)}\n\n## 经历\n${JSON.stringify([p])}`,
+            content: `## JD\n${jd}\n\n## 匹配表\n${JSON.stringify(matchTable)}\n\n## 用户已确认的能力（只能写对应的具体行为）\n${JSON.stringify(confirmed)}\n\n## 经历\n${JSON.stringify(p)}`,
           },
         ]),
       ),
     );
-    const ok = results.filter((r) => r.status === "fulfilled").map((r) => (Array.isArray(r.value.highlights) ? r.value.highlights : []));
-    if (ok.length === 0) {
+    const reqIds = new Set(matchTable.map((r) => r.id).filter(Boolean));
+    const raw: Highlight[] = [];
+    const dispositions: Disposition[] = [];
+    const unused: UnusedFact[] = [];
+    const failedExperienceIds: string[] = [];
+    targets.forEach((p, i) => {
+      const r = results[i];
+      const data = r.status === "fulfilled" && r.value && typeof r.value === "object" ? (r.value as Record<string, unknown>) : null;
+      const items = Array.isArray(data?.highlights) ? (data!.highlights as Record<string, unknown>[]) : [];
+      // 请求失败或没返回任何句子的经历要告诉用户，不能静默缺段
+      if (!data || items.length === 0) {
+        failedExperienceIds.push(p.experienceId);
+        return;
+      }
+      for (const h of items) {
+        if (!h || typeof h.text !== "string") continue;
+        raw.push({
+          // 每次只写一段经历，归属以请求的经历为准（模型写错 id 时由所引事实再核对）
+          experienceId: p.experienceId,
+          text: tidyBullet(h.text),
+          factIds: Array.isArray(h.factIds) ? (h.factIds as unknown[]).filter((x): x is string => typeof x === "string") : [],
+          requirementIds: Array.isArray(h.requirementIds) ? (h.requirementIds as unknown[]).filter((x): x is string => typeof x === "string" && reqIds.has(x)) : [],
+          selection: SELECTIONS.includes(h.selection as Selection) ? (h.selection as Selection) : "expanded",
+          questions: [],
+        });
+      }
+      const d = data.disposition as Record<string, unknown> | undefined;
+      const level = d && LEVELS.includes(d.level as Disposition["level"]) ? (d.level as Disposition["level"]) : undefined;
+      if (level) dispositions.push({ experienceId: p.experienceId, level, reason: typeof d!.reason === "string" ? d!.reason : "" });
+      // 没写进句子的事实：模型给的原因；模型漏写的由程序补上（R10：资产不静默消失）
+      const cited = new Set(items.flatMap((h) => (Array.isArray(h.factIds) ? (h.factIds as string[]) : [])));
+      const reasons = new Map(
+        (Array.isArray(data.unused) ? (data.unused as Record<string, unknown>[]) : [])
+          .filter((u) => u && typeof u.factId === "string")
+          .map((u) => [u.factId as string, typeof u.reason === "string" ? u.reason : ""]),
+      );
+      for (const f of p.facts) if (!cited.has(f.id)) unused.push({ experienceId: p.experienceId, factId: f.id, reason: reasons.get(f.id) || "本次撰写没有用到" });
+    });
+    if (raw.length === 0 && failedExperienceIds.length === targets.length) {
       const first = results.find((r) => r.status === "rejected");
-      throw first?.reason ?? new Error("没有可生成的经历");
+      throw (first as PromiseRejectedResult | undefined)?.reason ?? new Error("没有可生成的经历");
     }
-    // 请求失败或没返回任何亮点的经历要告诉用户，不能静默缺段
-    const failedExperienceIds = targets
-      .filter((_, i) => {
-        const r = results[i];
-        return r.status === "rejected" || !Array.isArray(r.value.highlights) || r.value.highlights.length === 0;
-      })
-      .map((p) => p.experienceId);
-    // 这里只写亮点；问答在核验通过后由 /api/qa 生成，模型多给的 questions 一律丢弃
-    const raw = ok.flat().map((h) => ({ experienceId: h.experienceId, text: h.text, factIds: h.factIds, questions: [] }));
+    // 一致性：直接或可迁移支持了必需要求的句子至少算「次相关」，不能只作为可选内容（S5：相关且有支持的内容优先）
+    const coreSupported = new Set(
+      matchTable.filter((r) => r.id && ["direct_support", "transferable_support", "expression_gap"].includes(String(r.status)) && r.category !== "bonus").map((r) => r.id!),
+    );
+    for (const h of raw) {
+      if (h.selection === "optional" && (h.requirementIds ?? []).some((id) => coreSupported.has(id))) h.selection = "condensed";
+    }
+    for (const d of dispositions) {
+      if (d.level === "optional" && raw.some((h) => h.experienceId === d.experienceId && h.selection !== "optional")) {
+        d.level = "condensed";
+        d.reason = `${d.reason}（这段经历支持了岗位的必需要求，至少保留一条）`;
+      }
+    }
+    // 这里只写简历句；问答在核验通过后由 /api/qa 生成
     const { kept, dropped } = checkHighlights(raw, experiences);
-    return NextResponse.json({ highlights: kept, dropped, failedExperienceIds });
+    return NextResponse.json({ highlights: kept, dropped, failedExperienceIds, dispositions, unused });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }

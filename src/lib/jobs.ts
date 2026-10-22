@@ -5,11 +5,11 @@ import { postJson } from "@/components/ui";
 import { KEYS, read, uid, writeStored } from "@/lib/storage";
 import { BULLET_RE, findSameExperience } from "@/lib/importText";
 import type { ImportResponse } from "@/lib/importText";
-import type { AbilityEvidence, Education, Experience, Highlight, MatchResult, Profile, Requirement, ResumeResult } from "@/lib/types";
+import type { AbilityEvidence, Education, Experience, Highlight, MatchResult, Profile, Requirement, ResumeResult, Selection } from "@/lib/types";
 import { educationKey } from "@/lib/education";
 import { refreshMatch } from "@/lib/matching";
 import type { AbilityDecisions } from "@/lib/matching";
-import { checkHighlights, failQA, failVerification, markStale, norm } from "@/lib/validate";
+import { checkHighlights, failQA, failVerification, markStale, norm, tidyBullet } from "@/lib/validate";
 
 /**
  * 「粘贴简历导入」「分析匹配」「生成定向简历」的后台任务。
@@ -254,7 +254,7 @@ export async function runMatch(jd: string, experiences: Experience[]) {
   }
 }
 
-type Generated = Pick<ResumeResult, "highlights" | "dropped" | "failedExperienceIds">;
+type Generated = Pick<ResumeResult, "highlights" | "dropped" | "failedExperienceIds" | "dispositions" | "unused">;
 
 /**
  * 撰写 → 逐句核验 → 面试准备。各阶段失败都按技术错误处理（02 S6、T14）：
@@ -293,7 +293,13 @@ async function generate(
     let k = 0;
     answered = verified.highlights.map((h) => ((h.exportStatus ?? "ready") === "ready" ? (withQA[k++] ?? h) : h));
   }
-  return { highlights: answered, dropped: [...data.dropped, ...verified.dropped], failedExperienceIds: data.failedExperienceIds ?? [] };
+  return {
+    highlights: answered,
+    dropped: [...data.dropped, ...verified.dropped],
+    failedExperienceIds: data.failedExperienceIds ?? [],
+    dispositions: data.dispositions ?? [],
+    unused: data.unused ?? [],
+  };
 }
 
 /** 撰写专用匹配表：按当前履历、教育背景和推断确认记录重新推导；未确认的推断不作为依据（R09） */
@@ -316,7 +322,9 @@ export async function runResume(match: MatchResult, experiences: Experience[]) {
       highlights: data.highlights,
       dropped: data.dropped,
       failedExperienceIds: data.failedExperienceIds ?? [],
-      // 只有 exportStatus 为 ready 的句子会被导出
+      dispositions: data.dispositions,
+      unused: data.unused,
+      // 只有 exportStatus 为 ready 且选入简历的句子会被导出
       provenanceChecked: true,
       requirements,
       abilities,
@@ -370,6 +378,8 @@ export async function retryExperience(experienceId: string) {
         highlights: [...latest.highlights.filter((h) => h.experienceId !== experienceId), ...data.highlights],
         dropped: [...latest.dropped.filter((d) => d.experienceId !== experienceId), ...data.dropped],
         failedExperienceIds: (latest.failedExperienceIds ?? []).filter((id) => id !== experienceId),
+        dispositions: [...(latest.dispositions ?? []).filter((d) => d.experienceId !== experienceId), ...(data.dispositions ?? [])],
+        unused: [...(latest.unused ?? []).filter((u) => u.experienceId !== experienceId), ...(data.unused ?? [])],
       });
       update({ retrying: null });
       return;
@@ -420,6 +430,54 @@ export async function retryExperience(experienceId: string) {
     update({ retrying: null });
   } catch (e) {
     update({ retrying: null, retryError: `「${label}」重试失败：${(e as Error).message}，已保留原状` });
+  }
+}
+
+/** 把一句放进简历或移出简历（选材可恢复，不删除内容；02 R10、T15） */
+export function setSelection(index: number, selection: Selection) {
+  const resume = read<ResumeResult | null>(KEYS.resume, null);
+  if (!resume || !resume.highlights[index]) return;
+  const highlights = resume.highlights.map((h, i) => (i === index ? { ...h, selection } : h));
+  writeStored(KEYS.resume, { ...resume, highlights });
+}
+
+/**
+ * 把一条本次没写进句子的事实加入简历：以原话作为句子（只做格式整理），同样经过逐句核验和面试准备，
+ * 核验确认它是候选人的经历描述后才可导出。
+ */
+export async function addFactAsBullet(experienceId: string, factId: string) {
+  if (state.resume || state.retrying) return;
+  const resume = read<ResumeResult | null>(KEYS.resume, null);
+  const exp = read<Experience[]>(KEYS.experiences, []).find((e) => e.id === experienceId);
+  const fact = exp?.facts.find((f) => f.id === factId);
+  if (!resume || !exp || !fact) return;
+  update({ retrying: experienceId, retryError: "" });
+  try {
+    const { kept } = checkHighlights([{ experienceId, text: tidyBullet(fact.source), factIds: [factId], questions: [], selection: "expanded" }], [exp]);
+    if (kept.length === 0) throw new Error("这条事实无法作为简历句");
+    let verified: Highlight[];
+    try {
+      verified = (await postJson<{ highlights: Highlight[] }>("/api/verify", { highlights: kept, experiences: [exp] })).highlights;
+    } catch {
+      verified = failVerification(kept);
+    }
+    let added = verified;
+    if (verified[0] && (verified[0].exportStatus ?? "ready") === "ready") {
+      try {
+        added = (await postJson<{ highlights: Highlight[] }>("/api/qa", { jd: resume.jd, highlights: verified, experiences: [exp] })).highlights;
+      } catch {
+        added = failQA(verified);
+      }
+    }
+    const latest = read<ResumeResult | null>(KEYS.resume, null) ?? resume;
+    writeStored(KEYS.resume, {
+      ...latest,
+      highlights: [...latest.highlights, ...added],
+      unused: (latest.unused ?? []).filter((u) => !(u.experienceId === experienceId && u.factId === factId)),
+    });
+    update({ retrying: null });
+  } catch (e) {
+    update({ retrying: null, retryError: `加入失败：${(e as Error).message}` });
   }
 }
 

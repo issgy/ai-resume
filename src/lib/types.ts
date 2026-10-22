@@ -151,7 +151,21 @@ export type Highlight = {
   assertionChecks?: AssertionCheck[];
   /** 面试追问生成失败（不影响亮点导出，可重试） */
   qaFailed?: boolean;
+  /** 这句对应的 JD 要求 id */
+  requirementIds?: string[];
+  /**
+   * 选材去向（02 ResumeBullet.selection_status）：expanded / condensed 写入简历；optional 低相关、默认不放进简历；
+   * hidden_by_user 用户从简历中移出。都可恢复，不删除资产。旧数据没有该字段，按写入简历处理
+   */
+  selection?: Selection;
 };
+
+export type Selection = "expanded" | "condensed" | "optional" | "hidden_by_user";
+
+/** 每段经历在本份简历中的去向与原因 */
+export type Disposition = { experienceId: string; level: "expanded" | "condensed" | "optional"; reason: string };
+/** 本次没有写进句子的事实及原因 */
+export type UnusedFact = { experienceId: string; factId: string; reason: string };
 
 export type DroppedHighlight = {
   text: string;
@@ -192,4 +206,8 @@ export type ResumeResult = {
   abilities?: AbilityEvidence[];
   /** 生成时的完整匹配结果：局部重试时按当前履历和确认记录重新推导撰写用匹配表 */
   match?: MatchResult;
+  /** 每段经历的篇幅去向与原因；旧数据没有 */
+  dispositions?: Disposition[];
+  /** 没有写进句子的事实及原因；旧数据没有 */
+  unused?: UnusedFact[];
 };

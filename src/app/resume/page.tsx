@@ -6,8 +6,8 @@ import { Button, Card, ErrorText, PageHeader } from "@/components/ui";
 import { isInAppBrowser, renderResume, saveFile, toPdf } from "@/lib/exportPdf";
 import { KEYS, useStored } from "@/lib/storage";
 import type { Experience, Highlight, Profile, ResumeResult } from "@/lib/types";
-import { isExportable, isInsufficient, markStale, needsInput } from "@/lib/validate";
-import { experienceLabel, retryExperience, useJobs } from "@/lib/jobs";
+import { isExportable, isIncluded, isInsufficient, markStale, needsInput } from "@/lib/validate";
+import { addFactAsBullet, experienceLabel, retryExperience, setSelection, useJobs } from "@/lib/jobs";
 
 const EMPTY_PROFILE: Profile = { name: "", phone: "", email: "", school: "", birthday: "" };
 const FIELDS: [keyof Profile, string][] = [
@@ -66,22 +66,31 @@ export default function ResumePage() {
     return origin === "edited" ? "你在履历库手动修改为" : origin === "manual" ? "你手动补充" : origin === "imported" ? "简历原文" : "你说过";
   };
   const failedIds = new Set(resume.failedExperienceIds ?? []);
+  const indexed = resume.highlights.map((h, i) => ({ h, i }));
+  const dispositionOf = new Map((resume.dispositions ?? []).map((d) => [d.experienceId, d]));
   const sections = experiences
     .filter((e) => e.facts.length > 0)
     .map((e) => {
-      const all = resume.highlights.filter((h) => h.experienceId === e.id);
+      const all = indexed.filter(({ h }) => h.experienceId === e.id);
+      const ready = all.filter(({ h }) => isExportable(h, resume));
       return {
         exp: e,
-        items: all.filter((h) => isExportable(h, resume)),
-        waiting: all.filter((h) => !isExportable(h, resume)),
+        items: ready.filter(({ h }) => isIncluded(h)),
+        optional: ready.filter(({ h }) => !isIncluded(h)),
+        waiting: all.filter(({ h }) => !isExportable(h, resume)).map(({ h }) => h),
+        unused: (resume.unused ?? []).filter((u) => u.experienceId === e.id && e.facts.some((f) => f.id === u.factId)),
+        disposition: dispositionOf.get(e.id),
         failed: failedIds.has(e.id),
         generated: all.length > 0,
       };
     });
-  // 简历正文（屏幕、打印、PDF、长图）只放 ready 的句子；待处理、生成失败、本次未生成的经历在正文之外列出，履历事实都不删除
+  // 简历正文（屏幕、打印、PDF、长图）只放 ready 且选入简历的句子；可选内容、待处理、本次未生成的经历在正文之外列出，
+  // 每段都有去向和原因、可以恢复，履历事实都不删除（02 R10、S5）
   const verifiedSections = sections.filter((s) => s.items.length > 0);
+  const optionalSections = sections.filter((s) => s.optional.length > 0 || s.unused.length > 0);
   const waiting = sections.filter((s) => s.waiting.length > 0 || s.failed);
   const notGenerated = sections.filter((s) => !s.generated && !s.failed);
+  const LEVEL = { expanded: "高相关·展开", condensed: "次相关·压缩", optional: "低相关·可选" } as const;
   const retryButton = (expId: string, label = "重试这段") => (
     <Button variant="ghost" className="!px-3 !py-1 text-xs" onClick={() => retryExperience(expId)} disabled={!!jobs.retrying || !!jobs.resume}>
       {jobs.retrying === expId ? "重试中…" : label}
@@ -166,14 +175,20 @@ export default function ResumePage() {
             暂无可导出的简历句，请查看下方待处理内容，或<Link href="/match" className="underline">重新生成</Link>。
           </p>
         )}
-        {verifiedSections.map(({ exp, items }) => (
+        {verifiedSections.map(({ exp, items, disposition }) => (
           <section key={exp.id} className="mb-4 break-inside-avoid">
             <div className="flex justify-between text-sm font-semibold">
               <span>{experienceLabel(exp)}</span>
               <span className="font-normal text-slate-500">{[exp.start, exp.end].filter(Boolean).join(" – ")}</span>
             </div>
+            {disposition && (
+              <div className="no-print mt-0.5 text-[11px] text-muted">
+                <span className="mr-1 rounded-full bg-slate-100 px-1.5 py-0.5">{LEVEL[disposition.level]}</span>
+                {disposition.reason}
+              </div>
+            )}
             <ul className="mt-1 space-y-1">
-              {items.map((h, i) => (
+              {items.map(({ h, i }) => (
                 <li key={i} className="text-sm">
                   <details className="group">
                     <summary className="cursor-pointer list-none before:mr-1 before:content-['•'] print:cursor-auto">
@@ -184,6 +199,16 @@ export default function ResumePage() {
                           {needsInput(h)} 个追问需补充
                         </span>
                       )}
+                      <button
+                        className="no-print ml-1 rounded-full px-2 py-0.5 text-[11px] text-muted hover:bg-paper group-open:hidden"
+                        title="从本份简历移出（可以在下方「未放进简历的内容」恢复）"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setSelection(i, "hidden_by_user");
+                        }}
+                      >
+                        移出
+                      </button>
                     </summary>
                     <div className="no-print my-2 space-y-3 rounded-xl border border-line bg-paper p-4 text-xs">
                       <div>
@@ -234,6 +259,49 @@ export default function ResumePage() {
           </section>
         ))}
       </article>
+
+      {/* 正文之外：本份简历没放进去的内容（低相关可选、用户移出、没写进句子的事实），都可以恢复 */}
+      {optionalSections.length > 0 && (
+        <div className="no-print space-y-4 rounded-3xl border border-line bg-card p-5 text-sm">
+          <div>
+            <h2 className="font-semibold">未放进本份简历的内容</h2>
+            <p className="text-xs text-muted">这些都是你的真实经历，只是和这个岗位相关度较低或篇幅有限；不是没通过核验，可以随时放进简历。</p>
+          </div>
+          {optionalSections.map(({ exp, optional, unused, disposition }) => (
+            <section key={exp.id} className="space-y-1.5">
+              <div className="font-medium">
+                {experienceLabel(exp)}
+                {disposition && <span className="ml-2 text-xs font-normal text-muted">{LEVEL[disposition.level]}：{disposition.reason}</span>}
+              </div>
+              <ul className="space-y-1">
+                {optional.map(({ h, i }) => (
+                  <li key={i} className="flex items-start justify-between gap-2">
+                    <span className="text-slate-700">
+                      {h.text}
+                      <span className="ml-1 text-xs text-muted">{h.selection === "hidden_by_user" ? "（你移出的）" : "（低相关，可选）"}</span>
+                    </span>
+                    <Button variant="ghost" className="!px-3 !py-1 text-xs" onClick={() => setSelection(i, "expanded")}>放进简历</Button>
+                  </li>
+                ))}
+                {unused.map((u) => {
+                  const f = exp.facts.find((x) => x.id === u.factId)!;
+                  return (
+                    <li key={u.factId} className="flex items-start justify-between gap-2">
+                      <span className="text-slate-600">
+                        {f.text}
+                        <span className="ml-1 text-xs text-muted">（未写进句子：{u.reason}）</span>
+                      </span>
+                      <Button variant="ghost" className="!px-3 !py-1 text-xs" onClick={() => addFactAsBullet(exp.id, u.factId)} disabled={!!jobs.retrying}>
+                        {jobs.retrying === exp.id ? "加入中…" : "加入简历"}
+                      </Button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))}
+        </div>
+      )}
 
       {/* 正文之外：待处理（不导出、可重试） */}
       {waiting.length > 0 && (
