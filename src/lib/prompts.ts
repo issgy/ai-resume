@@ -82,6 +82,7 @@ export const MATCHER = COMMON + `你是岗位匹配分析模块。给你今天�
 【第 3 步：多对多匹配（matches）】
 - 对每条要求，扫描全部经历的全部事实，列出所有能支持它的证据，不要只留一条最佳；再从每段经历反查它能支持哪些要求，补上遗漏。
 - 一条证据可以引用多条事实（fact_ids）和能力推断（ability_ids），必须写 rationale；跨行业或跨场景时 relation 用 transferable，并在 rationale 里说明差异。
+- 事实本身就能直接支持要求时，ability_ids 留空；只有必须借助推断才能说明关系时才填 ability_ids（填了就表示这条证据依赖该推断，推断未经用户确认前不算确定依据）。
 - status：direct_support 直接支持 / transferable_support 可迁移支持 / expression_gap 有相关事实但表述不足 / needs_evidence 可能具备但缺证据 / unknown 材料没提到。不要判 actual_gap（材料没写不等于不具备）。
 - 年限要求也要列出相关经历的事实作为证据，年限由系统按这些经历的起止时间计算。
 - 同一事实重复出现不增加证据强度；可迁移支持不能当作硬门槛已满足。

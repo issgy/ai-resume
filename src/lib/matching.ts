@@ -22,8 +22,6 @@ const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 const strs = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : []);
 const obj = (v: unknown) => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
 
-/** 证书、考试类说法：JD 原文没提时不能作为要求或缺失点 */
-const CERT_RE = /证书|证件|考试|资格证|cet|雅思|ielts|托福|toefl|tem|四级|六级|专八|专四|pmp|cpa|执照/i;
 /** 只有上限的年限条件（「5 年以下」「不超过 5 年」） */
 const UPPER_ONLY_RE = /(\d+|[一二两三四五六七八九十])\s*年\s*(以下|以内|之内)|(不超过|不多于|最多|至多)\s*(\d+|[一二两三四五六七八九十])\s*年/;
 /** 区间写法「3—5 年」「3-5年」里的上限数字 */
@@ -162,9 +160,9 @@ export function derive(r: Requirement, ctx: DeriveCtx): Requirement {
       yMissing.push(`经历起止时间不完整，无法核实 ${minYears} 年年限`);
     } else if (have < minYears) {
       // 只有当履历库里其余经历都已计入、或全部经历加起来也不够时，才能确定不满足；否则其余经历是否相关未知
-      // 有事实的经历模型已经看过（没列为直接证据就是判断为不相关或只可迁移）；只有还没有任何事实的经历，领域未知
+      // 没被计入的经历即使有事实，也不代表领域已说明清楚（履历常常只录了一部分）：都视为「是否相关未知」
       const counted = new Set(exps.map((e) => e.id));
-      const rest = ctx.experiences.filter((e) => !counted.has(e.id) && e.facts.length === 0);
+      const rest = ctx.experiences.filter((e) => !counted.has(e.id));
       const allHave = experienceYears(ctx.experiences, ctx.now);
       const determinable = rest.length === 0 || (allHave !== null && allHave < minYears);
       const label = `需要 ${minYears} 年以上，直接相关经历合计约 ${Math.round(have * 10) / 10} 年（重叠时间不重复计算）`;
@@ -254,6 +252,22 @@ function certTokens(s: string): string[] {
   return [...new Set([...named, ...exams].map((t) => norm(t).toLowerCase()).filter(Boolean))];
 }
 
+/** 摘录里和这条要求对应的分句：按字的重合度挑选（年限数字、学历词优先对上） */
+function clauseFor(text: string, quote: string): string {
+  const parts = quote.split(/[，,；;。\n]/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length <= 1) return quote;
+  const t = norm(text);
+  const key = [...(text.match(/\d+|博士|硕士|本科|大专|专科/g) ?? [])];
+  const score = (p: string) => {
+    const n = norm(p);
+    const keyHit = key.filter((k) => n.includes(k)).length * 10;
+    let overlap = 0;
+    for (const ch of new Set(t)) if (n.includes(ch)) overlap++;
+    return keyHit + overlap / Math.max(1, n.length);
+  };
+  return parts.reduce((best, p) => (score(p) > score(best) ? p : best), parts[0]);
+}
+
 /** 年限条件的方向：下限（以上/至少）、上限（以下/不超过）、区间；没有方向时为空 */
 function boundOf(t: string): string {
   if (RANGE_UPPER_RE.test(t)) return "range";
@@ -314,12 +328,14 @@ export function normalizeMatch(raw: unknown, jd: string, experiences: Experience
     const certScope = (located ? norm(quote) : jdNorm).toLowerCase();
     if (certTokens(text).some((t) => !certScope.includes(t))) return;
     // 规范化后的年限、学历及其上下限逻辑必须与原文一致；不一致时以 JD 原文为准
+    // 限定词只看这条要求对应的分句：模型常把整句摘进来，同句里别的条件的「不限/优先」不能影响它
+    const clause = located ? clauseFor(text, quote) : "";
     let normalized = text;
     const gateLike = requiredYears(text) !== null || UPPER_ONLY_RE.test(text) || isEducationRequirement(text);
-    if (located && gateLike && (!gateInJd(text, norm(quote)) || boundOf(text) !== boundOf(quote))) normalized = quote;
+    if (located && gateLike && (!gateInJd(text, norm(clause)) || boundOf(text) !== boundOf(clause))) normalized = clause;
     // 原文写了「不要求/不限」的不是要求；写了「优先/加分」的不能当必需条件
-    if (located && /不要求|不限/.test(quote) && !/不限于/.test(quote)) return;
-    const optionalInJd = located && /优先|加分|更佳|为佳/.test(quote);
+    if (located && /不要求|不限/.test(clause) && !/不限于/.test(clause)) return;
+    const optionalInJd = located && /优先|加分|更佳|为佳/.test(clause);
     let category = CATEGORIES.includes(r.category as RequirementCategory) ? (r.category as RequirementCategory) : "professional_ability";
     let ambiguity = str(r.ambiguity);
     if (!located && category === "hard_gate") {
@@ -351,10 +367,8 @@ export function normalizeMatch(raw: unknown, jd: string, experiences: Experience
       const rationale = str(e.rationale);
       // 联合证据引用了未知或不可用的 id：整条拒绝
       if ((factIds.length === 0 && abIds.length === 0) || !rationale || factIds.length !== new Set(rawFacts).size || abIds.length !== rawAbs.length) continue;
-      // 推断的事实都已在本条证据里直接列出时，它只是说明，不构成额外依赖（事实本身就是直接依据）
-      const own = new Set(factIds);
-      const deps = abIds.filter((id) => !abilities.find((a) => a.id === id)!.factIds.every((f) => own.has(f)));
-      slot.evidence.push({ factIds, abilityIds: deps, relation: e.relation === "transferable" ? "transferable" : "direct", rationale });
+      // 证据里列出的推断都是依赖：推断待确认或被拒绝时整条证据不能作为确定依据（不从事实 id 重合推定事实能独立支持）
+      slot.evidence.push({ factIds, abilityIds: abIds, relation: e.relation === "transferable" ? "transferable" : "direct", rationale });
     }
     for (const s of strs(r.missing)) if (!slot.missing.includes(s)) slot.missing.push(s);
     merged.set(rid, slot);
