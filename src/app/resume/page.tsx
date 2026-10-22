@@ -68,6 +68,14 @@ export default function ResumePage() {
   const failedIds = new Set(resume.failedExperienceIds ?? []);
   const indexed = resume.highlights.map((h, i) => ({ h, i }));
   const dispositionOf = new Map((resume.dispositions ?? []).map((d) => [d.experienceId, d]));
+  // 本段已生成句子、但有事实既没被引用也不在 unused 里（旧版简历没有 unused，或生成后新增的事实）：同样列为可加入，不让事实没有入口
+  const unusedOf = (e: Experience, own: Highlight[]) => {
+    if (own.length === 0) return [];
+    const listed = (resume.unused ?? []).filter((u) => u.experienceId === e.id && e.facts.some((f) => f.id === u.factId));
+    const cited = new Set([...own.flatMap((h) => h.factIds), ...listed.map((u) => u.factId)]);
+    const rest = e.facts.filter((f) => !cited.has(f.id)).map((f) => ({ experienceId: e.id, factId: f.id, reason: resume.unused ? "生成简历后新增，或本次没有写入" : "旧版简历没有使用这条" }));
+    return [...listed, ...rest];
+  };
   const sections = experiences
     .filter((e) => e.facts.length > 0)
     .map((e) => {
@@ -78,7 +86,7 @@ export default function ResumePage() {
         items: ready.filter(({ h }) => isIncluded(h)),
         optional: ready.filter(({ h }) => !isIncluded(h)),
         waiting: all.filter(({ h }) => !isExportable(h, resume)).map(({ h }) => h),
-        unused: (resume.unused ?? []).filter((u) => u.experienceId === e.id && e.facts.some((f) => f.id === u.factId)),
+        unused: unusedOf(e, all.map(({ h }) => h)),
         disposition: dispositionOf.get(e.id),
         failed: failedIds.has(e.id),
         generated: all.length > 0,
