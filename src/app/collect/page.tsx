@@ -85,7 +85,7 @@ function PasteImport() {
             {tooShort && `，内容太短（至少 ${IMPORT_MIN} 字）`}
             {tooLong && "，超出上限，请删减后再导入"}
           </span>
-          <Button variant="accent" onClick={() => runImport(text.trim())} disabled={running || count < IMPORT_MIN || tooLong}>
+          <Button variant="accent" onClick={() => runImport(text.trim())} disabled={running || !!jobs.importReview || count < IMPORT_MIN || tooLong}>
             {running ? "解析中，可以先去做别的…" : "解析并存入履历库"}
           </Button>
         </div>
@@ -129,7 +129,11 @@ function PasteImport() {
 function ImportReviewPanel({ review }: { review: ImportReview }) {
   const [merge, setMerge] = useState<Record<number, boolean>>({});
   const [keepNotes, setKeepNotes] = useState<Record<string, boolean>>({});
+  const [dates, setDates] = useState<Record<number, "existing" | "imported">>({});
   const exp = (i: number) => review.data.experiences[i];
+  const span = (d: { start: string; end: string }) => [d.start, d.end].filter(Boolean).join(" – ") || "未写时间";
+  // 要合并且起止时间不一致的，必须先选用哪边的时间
+  const missingDate = review.duplicates.some((d) => d.dates && (d.sure || merge[d.index]) && !dates[d.index]);
   return (
     <Card className="animate-rise space-y-4 border-amber-200">
       <div>
@@ -144,14 +148,29 @@ function ImportReviewPanel({ review }: { review: ImportReview }) {
             <div key={d.index} className="space-y-1 rounded-2xl border border-line bg-paper/60 p-3 text-sm">
               <div className="font-medium">{d.label || "未命名经历"}</div>
               <div className="text-xs text-muted">{d.reason}</div>
-              <div className="flex gap-3 text-xs">
-                <label className="flex items-center gap-1">
-                  <input type="radio" checked={!!merge[d.index]} onChange={() => setMerge({ ...merge, [d.index]: true })} /> 是同一段，合并
-                </label>
-                <label className="flex items-center gap-1">
-                  <input type="radio" checked={!merge[d.index]} onChange={() => setMerge({ ...merge, [d.index]: false })} /> 保留两段
-                </label>
-              </div>
+              {!d.sure && (
+                <div className="flex gap-3 text-xs">
+                  <label className="flex items-center gap-1">
+                    <input type="radio" checked={!!merge[d.index]} onChange={() => setMerge({ ...merge, [d.index]: true })} /> 是同一段，合并
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <input type="radio" checked={!merge[d.index]} onChange={() => setMerge({ ...merge, [d.index]: false })} /> 保留两段
+                  </label>
+                </div>
+              )}
+              {d.dates && (d.sure || merge[d.index]) && (
+                <div className="space-y-1 rounded-lg bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+                  <div>两边的起止时间不一致，合并后用哪一个？（会影响工作年限的计算）</div>
+                  <label className="flex items-center gap-1">
+                    <input type="radio" checked={dates[d.index] === "existing"} onChange={() => setDates({ ...dates, [d.index]: "existing" })} />
+                    {d.existingId ? "履历库里的" : "这次导入的另一段"}：{span(d.dates.existing)}
+                  </label>
+                  <label className="flex items-center gap-1">
+                    <input type="radio" checked={dates[d.index] === "imported"} onChange={() => setDates({ ...dates, [d.index]: "imported" })} />
+                    这次导入的：{span(d.dates.imported)}
+                  </label>
+                </div>
+              )}
             </div>
           ))}
         </section>
@@ -180,7 +199,9 @@ function ImportReviewPanel({ review }: { review: ImportReview }) {
         </p>
       )}
       <div className="flex flex-wrap gap-2">
-        <Button variant="accent" onClick={() => confirmImport({ merge, keepNotes })}>确认存入履历库</Button>
+        <Button variant="accent" onClick={() => confirmImport({ merge, keepNotes, dates })} disabled={missingDate}>
+          {missingDate ? "请先选择起止时间" : "确认存入履历库"}
+        </Button>
         <Button variant="ghost" onClick={cancelImport}>放弃这次导入</Button>
       </div>
     </Card>

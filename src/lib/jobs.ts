@@ -158,16 +158,28 @@ const EMPTY_PROFILE: Profile = { name: "", phone: "", email: "", school: "", bir
 export type ImportReview = {
   data: ImportResponse;
   /** 疑似重复：导入的第 index 段与履历库已有经历 existingId（或同一次导入的第 otherIndex 段） */
-  duplicates: { index: number; existingId?: string; otherIndex?: number; label: string; reason: string }[];
+  duplicates: {
+    index: number;
+    existingId?: string;
+    otherIndex?: number;
+    label: string;
+    reason: string;
+    /** 已能确认是同一段（同开始时间或事实重合），只需确认时间 */
+    sure?: boolean;
+    /** 两边起止时间不一致：合并时由用户选用哪一边，不默认取旧值，也不自动取最大区间 */
+    dates?: { existing: { start: string; end: string }; imported: { start: string; end: string } };
+  }[];
   /** 看起来是资料备注或写给 AI 的指令，默认不作为经历事实 */
   notes: { index: number; factIndex: number; text: string }[];
   /** 没有公司和岗位的记录：会进履历库「未归类」，但不会写进简历 */
   unnamed: number[];
 };
-export type ImportChoices = { merge: Record<number, boolean>; keepNotes: Record<string, boolean> };
+export type ImportChoices = { merge: Record<number, boolean>; keepNotes: Record<string, boolean>; dates?: Record<number, "existing" | "imported"> };
 
 /** 资料备注：「证据待收集」「###下一项目」「TODO」这类整理资料时留下的说明，不是候选人的行为 */
-const NOTE_RE = /待收集|待补充|待完善|待确认|待核实|待整理|todo|^\s*#{2,}|^\s*(备注|注|说明)\s*[:：]|占位|此处填写|下一项目|示例文字/i;
+// 只认整条就是备注的写法；「建立待确认需求清单」这类句子里带关键词的真实行为不算（拿不准时保留为事实）
+const NOTE_RE =
+  /^\s*(#{2,}.*|(todo|tbd)\b.*|(备注|注)\s*[:：].*|((证据|材料|数据|内容|细节|成果|结果|量化)\s*)?(待收集|待补充|待完善|待确认|待核实|待整理)[。.!！]?|此处填写.*|(示例文字|占位(符|内容)?)[。.]?|下一(个|段)?(项目|经历)[:：]?)\s*$/i;
 
 /** 时间归一到「年-月」，只用于疑似重复判断（「2025-06」「2025.06」「2025年6月」视为同一月），不改原文 */
 function monthKey(s: string): number | null {
@@ -182,21 +194,41 @@ function overlaps(a: { start: string; end: string }, b: { start: string; end: st
   return as <= be && bs <= ae;
 }
 
+/** 起止时间是否矛盾（只比双方都写了的部分；写法不同但同一月不算） */
+function datesDiffer(a: { start: string; end: string }, b: { start: string; end: string }): boolean {
+  const diff = (x: string, y: string) => {
+    if (!x.trim() || !y.trim()) return false;
+    const kx = monthKey(x), ky = monthKey(y);
+    return kx !== null && ky !== null ? kx !== ky : norm(x) !== norm(y);
+  };
+  return diff(a.start, b.start) || diff(a.end, b.end);
+}
+
 function buildReview(data: ImportResponse, vault: Experience[]): ImportReview {
   const duplicates: ImportReview["duplicates"] = [];
   data.experiences.forEach((imp, i) => {
     const key = experienceKey(imp);
     if (!key) return;
-    // 能确认是同一段（同公司同岗位同开始时间原样一致，或事实重合）的会自动合并，不打扰用户
-    if (findSameExperience(vault, imp) >= 0) return;
+    const range = (e: { start: string; end: string }) => ({ start: e.start, end: e.end });
+    // 能确认是同一段（同公司同岗位同开始时间，或事实重合）的自动合并；只有起止时间不一致时才请用户选时间
+    const same = findSameExperience(vault, imp);
+    if (same >= 0) {
+      const v = vault[same];
+      if (datesDiffer(v, imp)) {
+        const label = [imp.company, imp.title].filter(Boolean).join(" · ");
+        duplicates.push({ index: i, existingId: v.id, sure: true, label, reason: "履历库已有这段经历，但起止时间与这次导入的不一致", dates: { existing: range(v), imported: range(imp) } });
+      }
+      return;
+    }
     const label = [imp.company, imp.title, [imp.start, imp.end].filter(Boolean).join("–")].filter(Boolean).join(" · ");
     const v = vault.find((e) => experienceKey(e) === key && (!e.start.trim() || !imp.start.trim() || monthKey(e.start) === monthKey(imp.start) || overlaps(e, imp)));
     if (v) {
-      duplicates.push({ index: i, existingId: v.id, label, reason: `履历库已有「${[v.company, v.title, [v.start, v.end].filter(Boolean).join("–")].filter(Boolean).join(" · ")}」，公司和岗位相同、时间${monthKey(v.start) === monthKey(imp.start) ? "相同（写法不同）" : "重叠或缺失"}` });
+      duplicates.push({ index: i, existingId: v.id, label, dates: datesDiffer(v, imp) ? { existing: range(v), imported: range(imp) } : undefined, reason: `履历库已有「${[v.company, v.title, [v.start, v.end].filter(Boolean).join("–")].filter(Boolean).join(" · ")}」，公司和岗位相同、时间${monthKey(v.start) === monthKey(imp.start) ? "相同（写法不同）" : "重叠或缺失"}` });
       return;
     }
     const j = data.experiences.findIndex((o, k) => k < i && experienceKey(o) === key && (monthKey(o.start) === monthKey(imp.start) || overlaps(o, imp)));
-    if (j >= 0) duplicates.push({ index: i, otherIndex: j, label, reason: "这次导入里有另一段公司、岗位相同且时间相同或重叠的记录" });
+    const o = data.experiences[j];
+    if (j >= 0) duplicates.push({ index: i, otherIndex: j, label, dates: datesDiffer(o, imp) ? { existing: range(o), imported: range(imp) } : undefined, reason: "这次导入里有另一段公司、岗位相同且时间相同或重叠的记录" });
   });
   const notes: ImportReview["notes"] = [];
   data.experiences.forEach((imp, i) =>
@@ -229,7 +261,7 @@ function applyImport(review: ImportReview, choices: ImportChoices = { merge: {},
     // 疑似重复：用户选择合并时并入对应经历，否则保留为独立的一段（02 S1：不自动合并可能不同的任职）
     const d = dupOf.get(i);
     let idx = -1;
-    if (d && choices.merge[i]) idx = d.existingId ? experiences.findIndex((e) => e.id === d.existingId) : (placed.get(d.otherIndex!) ?? -1);
+    if (d && (d.sure || choices.merge[i])) idx = d.existingId ? experiences.findIndex((e) => e.id === d.existingId) : (placed.get(d.otherIndex!) ?? -1);
     else if (!d) idx = findSameExperience(experiences, imp);
     const existing = idx >= 0 ? experiences[idx] : null;
     // 原文或整理后的文字任一相同都算重复（忽略行首项目符号），避免重复导入同一份简历时多出事实
@@ -249,7 +281,11 @@ function applyImport(review: ImportReview, choices: ImportChoices = { merge: {},
     facts += fresh.length;
     if (existing) {
       merged++;
-      experiences[idx] = { ...existing, start: existing.start || imp.start, end: existing.end || imp.end, facts: [...existing.facts, ...fresh] };
+      // 时间矛盾时按用户的选择；没矛盾时只补空缺
+      const useImported = !!d?.dates && choices.dates?.[i] === "imported";
+      const start = useImported ? imp.start || existing.start : existing.start || imp.start;
+      const end = useImported ? imp.end || existing.end : existing.end || imp.end;
+      experiences[idx] = { ...existing, start, end, facts: [...existing.facts, ...fresh] };
       placed.set(i, idx);
     } else {
       added++;
@@ -313,7 +349,8 @@ export function cancelImport() {
 }
 
 export async function runImport(text: string) {
-  if (state.import) return;
+  // 上一批还在等确认时不开始新的解析，免得上一批的选择套到新结果上
+  if (state.import || state.importReview) return;
   update({ import: "import", importError: "", importSummary: null, notice: null });
   markPending("import", true);
   try {
