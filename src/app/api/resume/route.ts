@@ -26,9 +26,13 @@ export async function POST(req: Request) {
     .filter((r) => r && typeof r.text === "string")
     .map((r) => {
       // 兜底：即使客户端传来的证据引用了未确认推断，也去掉；只靠它支持的要求按「需补证据」交给撰写
-      const evidence = (Array.isArray(r.evidence) ? r.evidence : [])
-        .map((e) => ({ factIds: (e.factIds ?? []).filter((id) => facts.has(id)), abilityIds: (e.abilityIds ?? []).filter((id) => confirmedIds.has(id)) }))
-        .filter((e) => e.factIds.length > 0 || e.abilityIds.length > 0);
+      // 联合证据：任何一个依赖不可用（事实已删除、推断未确认），整条证据都不计入
+      const evidence = (Array.isArray(r.evidence) ? r.evidence : []).filter(
+        (e) =>
+          (e.factIds ?? []).length + (e.abilityIds ?? []).length > 0 &&
+          (e.factIds ?? []).every((id) => facts.has(id)) &&
+          (e.abilityIds ?? []).every((id) => confirmedIds.has(id)),
+      );
       const status = r.status ?? r.coverage;
       return {
         id: r.id,

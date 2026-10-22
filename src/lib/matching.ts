@@ -104,12 +104,24 @@ export function derive(r: Requirement, ctx: DeriveCtx): Requirement {
     if (ctx.writer && a.confirmation !== "confirmed") return false;
     return a.factIds.every(factOk);
   };
-  const evidence: Evidence[] = (r.evidence ?? [])
-    .map((e) => ({ ...e, factIds: e.factIds.filter(factOk), abilityIds: e.abilityIds.filter(abilityOk) }))
-    .filter((e) => e.factIds.length > 0 || e.abilityIds.length > 0);
+  // 一条证据是联合依据：任何一个依赖（事实或推断）失效，整条证据都不再成立，不能拿剩下的部分沿用原结论
+  const allEvidence = r.evidence ?? [];
+  const evidence: Evidence[] = allEvidence.filter((e) => {
+    const facts = e.factIds.map(factOk);
+    const abs = e.abilityIds.map(abilityOk);
+    return facts.every(Boolean) && abs.every(Boolean) && e.factIds.length + e.abilityIds.length > 0;
+  });
+  const dropped = allEvidence.length - evidence.length;
   const factsOf = (es: Evidence[]) => [...new Set([...es.flatMap((e) => e.factIds), ...es.flatMap((e) => e.abilityIds.flatMap((a) => abilityById.get(a)!.factIds))])];
   const factIds = factsOf(evidence);
-  const direct = evidence.filter((e) => e.relation === "direct");
+  // 直接支持要沿整条依赖链判断：证据边是 direct，且引用的推断本身也是 direct
+  const direct = evidence.filter((e) => e.relation === "direct" && e.abilityIds.every((id) => abilityById.get(id)!.relation === "direct"));
+  // 门槛（硬性条件、年限）只能由事实或已确认的推断确定满足：证据里直接引用的事实算数，
+  // 只靠未确认推断的证据不算；计入的事实 = 直接引用的事实 + 已确认推断的事实
+  const firm = direct.filter((e) => e.factIds.length > 0 || e.abilityIds.every((id) => abilityById.get(id)!.confirmation === "confirmed"));
+  const firmFacts = [
+    ...new Set(firm.flatMap((e) => [...e.factIds, ...e.abilityIds.filter((id) => abilityById.get(id)!.confirmation === "confirmed").flatMap((id) => abilityById.get(id)!.factIds)])),
+  ];
 
   // 状态：有直接证据 → 直接支持（模型判「表述不足」时保留）；只有可迁移证据 → 可迁移支持；没有证据 → 需补证据 / 未知
   const ms = r.modelStatus ?? r.status ?? "unknown";
@@ -124,10 +136,14 @@ export function derive(r: Requirement, ctx: DeriveCtx): Requirement {
           : "direct_support"
         : "transferable_support";
 
-  // 缺失点：JD 原文没提证书/考试时，模型补的证书类缺失点删除
-  const jdHasCert = CERT_RE.test(ctx.jd);
-  const missing = (r.modelMissing ?? r.missing ?? []).filter((s) => (jdHasCert || !CERT_RE.test(s)) && s !== STALE_MISSING);
-  if (stale) missing.push(STALE_MISSING);
+  // 缺失点：对应 JD 原文里没有的证书/考试名称不能作为缺失点（按这条要求的原文逐项核对）
+  const scope = norm(r.jdQuote || ctx.jd).toLowerCase();
+  const certOk = (s: string) => certTokens(s).every((t) => scope.includes(t));
+  const missing = (r.modelMissing ?? r.missing ?? []).filter((s) => certOk(s) && s !== STALE_MISSING && !s.startsWith("部分依据引用的推断"));
+  if (stale || dropped > 0) {
+    if (stale) missing.push(STALE_MISSING);
+    else if (!ctx.writer) missing.push("部分依据引用的推断未被认可或待确认，这些依据暂不计入");
+  }
 
   let category: RequirementCategory = r.category ?? "professional_ability";
   let hardGate: HardGateResult = category === "hard_gate" ? "unknown" : "not_applicable";
@@ -135,18 +151,14 @@ export function derive(r: Requirement, ctx: DeriveCtx): Requirement {
   // 领域年限（「3—5 年采购经验」）：只按直接证据所在经历计算，重叠时间不重复（R05）；可迁移经历不计入（R06）
   if (minYears !== null) {
     category = r.type === "nice" ? "bonus" : "hard_gate";
-    const exps = [...new Map(factsOf(direct).map((id) => [factById.get(id)!.exp.id, factById.get(id)!.exp])).values()];
+    // 只按「直接且已确定」的证据所在经历计算；履历库可能没录全，没有证据时只能是未知，不能推成不满足
+    const exps = [...new Map(firmFacts.map((id) => [factById.get(id)!.exp.id, factById.get(id)!.exp])).values()];
     const have = exps.length ? experienceYears(exps, ctx.now) : null;
-    const allHave = experienceYears(ctx.experiences.filter((e) => e.facts.length > 0), ctx.now);
     const yMissing = missing.filter((s) => !/\d+(\.\d+)?\s*年/.test(s));
-    if (exps.length === 0 && allHave !== null && allHave < minYears) {
-      // 全部经历合计都不够下限，才能确定不满足
-      hardGate = "not_met";
-      status = "actual_gap";
-      yMissing.push(`需要 ${minYears} 年以上，全部经历合计约 ${Math.round(allHave * 10) / 10} 年（重叠时间不重复计算）`);
-    } else if (exps.length === 0) {
+    if (exps.length === 0) {
       hardGate = "unknown";
-      if (evidence.length > 0) yMissing.push("只有可迁移经历，不能计入这项行业年限");
+      if (status === "direct_support") status = "needs_evidence";
+      yMissing.push(evidence.length > 0 ? "只有可迁移或待确认的依据，不能确定这项年限" : `请补充与这项要求直接相关的经历（需要 ${minYears} 年以上）`);
     } else if (have === null) {
       hardGate = "unknown";
       yMissing.push(`经历起止时间不完整，无法核实 ${minYears} 年年限`);
@@ -157,7 +169,9 @@ export function derive(r: Requirement, ctx: DeriveCtx): Requirement {
     } else {
       hardGate = "met";
     }
-    return { ...base, category, status, hardGate, evidence, factIds, coverage: coverageOf(status, hardGate), missing: yMissing };
+    let yCoverage = coverageOf(status, hardGate);
+    if (yCoverage === "full" && yMissing.length > 0) yCoverage = "partial";
+    return { ...base, category, status, hardGate, evidence, factIds, coverage: yCoverage, missing: yMissing };
   }
 
   // 只有上限的年限条件：不是对候选人的最低要求，不判为已满足
@@ -167,7 +181,7 @@ export function derive(r: Requirement, ctx: DeriveCtx): Requirement {
 
   // 硬门槛：只有直接支持才算满足；可迁移支持不能当作已满足
   if (category === "hard_gate") {
-    hardGate = status === "direct_support" ? "met" : "unknown";
+    hardGate = status === "direct_support" && firm.length > 0 ? "met" : "unknown";
     if (status === "transferable_support") missing.push("可迁移经验不能直接满足这项硬性条件");
   }
   let coverage = coverageOf(status, hardGate);
@@ -219,6 +233,11 @@ export function refreshMatch(match: MatchResult, decisions: AbilityDecisions, ex
   return { ...match, abilities, requirements, experienceCoverage: coverageByExperience(requirements, abilities, experiences, reasons) };
 }
 
+/** 句子里出现的具体证书/考试名称（「证书」「考试」这类泛称本身也算） */
+function certTokens(s: string): string[] {
+  return [...new Set((s.match(new RegExp(CERT_RE.source, "gi")) ?? []).map((t) => t.toLowerCase()))];
+}
+
 /** 原文摘录没对上时的兜底：年限数字、学历层次词确实出现在 JD 里，说明这条门槛不是模型自己加的 */
 function gateInJd(text: string, jdNorm: string): boolean {
   const years = text.match(/\d+(?=\s*年)/g) ?? [];
@@ -234,7 +253,6 @@ export function normalizeMatch(raw: unknown, jd: string, experiences: Experience
   const factById = new Map(experiences.flatMap((e) => e.facts.map((f) => [f.id, f] as const)));
   const validFacts = (ids: unknown) => [...new Set(strs(ids).filter((id) => factById.has(id) && !isInstructionFact(factById.get(id)!)))];
   const jdNorm = norm(jd);
-  const jdHasCert = CERT_RE.test(jd);
 
   // 能力推断：至少引用一条有效事实，且写明理由
   const abilities: AbilityEvidence[] = [];
@@ -259,7 +277,7 @@ export function normalizeMatch(raw: unknown, jd: string, experiences: Experience
     const r = obj(x);
     const text = str(r?.text) || str(r?.normalized_requirement);
     if (!r || !text) return;
-    if (!jdHasCert && CERT_RE.test(text)) return;
+
     let id = str(r.id) || `R${i + 1}`;
     if (seenReq.has(id)) id = `${id}_${i + 1}`;
     seenReq.add(id);
@@ -267,6 +285,12 @@ export function normalizeMatch(raw: unknown, jd: string, experiences: Experience
     const located = !!quote && jdNorm.includes(norm(quote));
     // 学历、年限这类门槛条件必须能在 JD 原文中定位，否则就是模型自己加的条件
     if (!located && (isEducationRequirement(text) || requiredYears(text) !== null) && !gateInJd(text, jdNorm)) return;
+    // 证书/考试名称必须出现在对应原文（没有可定位原文时看整份 JD）里，否则是模型新增的条件
+    const certScope = (located ? norm(quote) : jdNorm).toLowerCase();
+    if (certTokens(text).some((t) => !certScope.includes(t))) return;
+    // 规范化后的年限、学历必须与原文一致；不一致时以 JD 原文为准
+    let normalized = text;
+    if (located && (requiredYears(text) !== null || isEducationRequirement(text)) && !gateInJd(text, norm(quote))) normalized = quote;
     let category = CATEGORIES.includes(r.category as RequirementCategory) ? (r.category as RequirementCategory) : "professional_ability";
     let ambiguity = str(r.ambiguity);
     if (!located && category === "hard_gate") {
@@ -274,7 +298,7 @@ export function normalizeMatch(raw: unknown, jd: string, experiences: Experience
       ambiguity = [ambiguity, "没能在 JD 原文中定位这条硬性条件，不作为门槛"].filter(Boolean).join("；");
     }
     const type = r.priority === "nice" || category === "bonus" ? "nice" : "must";
-    reqs.push({ id, text, jdQuote: located ? quote : "", category, type, logic: str(r.logic), ambiguity, factIds: [] });
+    reqs.push({ id, text: normalized, jdQuote: located ? quote : "", category, type, logic: str(r.logic), ambiguity, factIds: [] });
   });
   if (reqs.length === 0) return null;
 
@@ -301,11 +325,16 @@ export function normalizeMatch(raw: unknown, jd: string, experiences: Experience
   }
 
   // 区间被拆开时，只把与某条「区间上限」数字相同的上限条件并回去；独立的上限条件保留
-  const rangeUppers = new Set(reqs.flatMap((r) => [r.text, r.jdQuote ?? ""].map((t) => t.match(RANGE_UPPER_RE)?.[1]).filter((n): n is string => !!n)));
+  // 只有来自同一原文条件（摘录相互包含，或上限条没有摘录）且上限数字相同时才视为同一区间
+  const ranges = reqs.flatMap((r) => {
+    const n = [r.text, r.jdQuote ?? ""].map((t) => t.match(RANGE_UPPER_RE)?.[1]).find(Boolean);
+    return n ? [{ n, quote: norm(r.jdQuote ?? "") }] : [];
+  });
   const kept = reqs.filter((r) => {
     if (requiredYears(r.text) !== null || !UPPER_ONLY_RE.test(r.text)) return true;
     const n = r.text.match(/(\d+)\s*年/)?.[1];
-    return !(n && rangeUppers.has(n));
+    const q = norm(r.jdQuote ?? "");
+    return !ranges.some((g) => g.n === n && (!q || (g.quote && (g.quote.includes(q) || q.includes(g.quote)))));
   });
 
   const withModel: Requirement[] = kept.map((r) => {
