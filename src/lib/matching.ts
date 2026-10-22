@@ -255,7 +255,11 @@ function certTokens(s: string): string[] {
 /** 摘录里和这条要求对应的分句：按字的重合度挑选（年限数字、学历词优先对上） */
 function clauseFor(text: string, quote: string): string {
   // 顿号、括号、「但/且/并且/同时/需要」等也是分句边界（「学历不限、3年以上…」「3年以上…（有PMP证书者优先）」）
-  const parts = quote.split(/[，,；;。、\n（）()]|但是?|并且|而且|同时|且|需要|需/).map((p) => p.trim()).filter(Boolean);
+  // 汉字后的空格也是分句边界（「学历不限 3年以上采购经验」）；「大专 及以上」「本科 以上」这类修饰不拆开，数字后的空格（「3 年」）不拆
+  const parts = quote
+    .split(/[，,；;。、\n（）()]|(?<=[\u4e00-\u9fff])\s+(?![及以或含至到左右])|但是?|并且|而且|同时|且|需要|需/)
+    .map((p) => p?.trim())
+    .filter(Boolean);
   if (parts.length <= 1) return quote;
   const t = norm(text);
   const key = [...(text.match(/\d+|博士|硕士|本科|大专|专科/g) ?? [])];
