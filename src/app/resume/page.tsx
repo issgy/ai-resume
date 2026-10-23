@@ -35,11 +35,8 @@ export default function ResumePage() {
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   // 分页预览：与导出的 PDF 用同一套分页结果
-  const [pages, setPages] = useState<string[] | null>(null);
-  const [pageInfo, setPageInfo] = useState<{ count: number; key: string } | null>(null);
-  // 影响版面的内容（句子、选材、顺序、基本信息、经历）一变，之前算出的页数就不再显示
-  const layoutKey = JSON.stringify([stored?.highlights.map((h) => [h.text, h.selection, h.exportStatus]), stored?.order, profile, experiences.map((e) => [e.id, e.company, e.title, e.start, e.end])]);
-  const pageCount = pageInfo?.key === layoutKey ? pageInfo.count : 0;
+  // 分页结果连同算出它时的版面键一起存；正文一变（句子、选材、顺序、基本信息、来源失效），旧页数和预览就不再显示
+  const [pageInfo, setPageInfo] = useState<{ count: number; key: string; pages?: string[] } | null>(null);
 
   async function exportPdf() {
     if (!articleRef.current || !exportable) return;
@@ -53,7 +50,7 @@ export default function ResumePage() {
         return;
       }
       const file = await toPdf(rendered, `${profile.name.trim() || "我的"}-简历.pdf`);
-      setPageInfo({ count: rendered.breaks.length + 1, key: layoutKey });
+      setPageInfo({ count: rendered.breaks.length + 1, key: layoutKey() });
       await saveFile(file);
     } catch (e) {
       setExportError(`导出失败：${(e as Error).message || "未知错误"}，请重试`);
@@ -68,8 +65,8 @@ export default function ResumePage() {
     setExporting(true);
     try {
       const rendered = await renderResume(articleRef.current);
-      setPages(slicePages(rendered).map((c) => c.toDataURL("image/jpeg", 0.8)));
-      setPageInfo({ count: rendered.breaks.length + 1, key: layoutKey });
+      const key = layoutKey();
+      setPageInfo({ count: rendered.breaks.length + 1, key, pages: slicePages(rendered).map((c) => c.toDataURL("image/jpeg", 0.8)) });
     } catch (e) {
       setExportError(`分页预览失败：${(e as Error).message || "未知错误"}，请重试`);
     } finally {
@@ -123,6 +120,14 @@ export default function ResumePage() {
   // 简历正文（屏幕、打印、PDF、长图）只放 ready 且选入简历的句子；可选内容、待处理、本次未生成的经历在正文之外列出，
   // 每段都有去向和原因、可以恢复，履历事实都不删除（02 R10、S5）
   const verifiedSections = sections.filter((s) => s.items.length > 0);
+  // 版面键：按实际导出的正文计算（来源失效的句子已被 markStale 移出）
+  function layoutKey() {
+    return JSON.stringify([profile, verifiedSections.map(({ exp, items }) => [exp.company, exp.title, exp.start, exp.end, items.map(({ h }) => h.text)])]);
+  }
+  const fresh = pageInfo?.key === layoutKey();
+  const pageCount = fresh ? pageInfo!.count : 0;
+  const pages = fresh ? (pageInfo!.pages ?? null) : null;
+  const setPages = (v: null) => setPageInfo(pageInfo && { ...pageInfo, pages: v ?? undefined });
   // 调整顺序：只在正文里的经历之间移动，其余经历的相对位置不变
   const RANK = { expanded: 0, condensed: 1, optional: 2 } as const;
   const applyVisibleOrder = (visibleIds: string[]) => {

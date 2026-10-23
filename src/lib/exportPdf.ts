@@ -55,13 +55,17 @@ export function gapsBetween(lines: Line[]): Gap[] {
     if (last && l.t < last.b - 1) {
       last.b = Math.max(last.b, l.b);
       last.title = last.title || l.title;
+      if (last.block !== l.block) last.block = null;
     } else rows.push({ ...l });
   }
   const gaps: Gap[] = [];
   for (let i = 0; i + 1 < rows.length; i++) {
     const a = rows[i], b = rows[i + 1];
-    if (a.title || b.t <= a.b) continue;
-    gaps.push({ y: (a.b + b.t) / 2, kind: a.block && a.block === b.block ? "line" : "block" });
+    if (b.t <= a.b) continue;
+    const sameBlock = !!a.block && a.block === b.block;
+    // 标题最后一行之后不能断（标题和正文同页）；标题内部换行之间可以作为降级断点
+    if (a.title && !(sameBlock && b.title)) continue;
+    gaps.push({ y: (a.b + b.t) / 2, kind: sameBlock ? "line" : "block" });
   }
   return gaps;
 }
