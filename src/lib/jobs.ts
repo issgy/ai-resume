@@ -575,7 +575,62 @@ export async function retryExperience(experienceId: string) {
 
 /** 重新核验 / 生成面试准备后保留编排字段（选入状态、对应要求），否则低相关或已移出的句子会重新进入导出 */
 function keepLayout(h: Highlight, prev: Highlight): Highlight {
-  return { ...h, selection: prev.selection, requirementIds: prev.requirementIds ?? h.requirementIds };
+  return { ...h, selection: prev.selection, requirementIds: prev.requirementIds ?? h.requirementIds, edited: prev.edited, generatedText: prev.generatedText };
+}
+
+export const BULLET_MAX = 200;
+
+/**
+ * 改一句的措辞（02 S7、04「编辑后仅核验受影响内容」）：只重新核验这一句、重新生成这一句的面试追问，其他句子不动。
+ * 改写仍只能依据这句所引的履历事实；加了来源里没有的说法会照常被缩小或退回原话并写明原因（不提供强制保留）。
+ * restore=true 时恢复成生成时的句子（同样重新核验）。
+ */
+export async function editBullet(index: number, text: string, restore = false) {
+  if (state.resume || state.retrying) return;
+  const resume = read<ResumeResult | null>(KEYS.resume, null);
+  const prev = resume?.highlights[index];
+  const exp = prev && read<Experience[]>(KEYS.experiences, []).find((e) => e.id === prev.experienceId);
+  if (!resume || !prev || !exp) return;
+  const next = tidyBullet(text).trim();
+  if (!next) return update({ retryError: "句子不能为空；不想要这句可以点「移出」" });
+  if (next.length > BULLET_MAX) return update({ retryError: `句子太长（最多 ${BULLET_MAX} 字）` });
+  update({ retrying: prev.experienceId, retryError: "" });
+  try {
+    const factIds = prev.factIds.filter((id) => exp.facts.some((f) => f.id === id));
+    const { kept } = checkHighlights([{ experienceId: exp.id, text: next, factIds, questions: [] }], [exp]);
+    if (kept.length === 0) throw new Error("这句引用的履历事实都已删除，没法再核验；可以把它移出简历");
+    let verified: Highlight[];
+    try {
+      verified = (await postJson<{ highlights: Highlight[] }>("/api/verify", { highlights: kept, experiences: [exp] })).highlights;
+    } catch {
+      verified = failVerification(kept);
+    }
+    let out = verified;
+    if (verified[0] && (verified[0].exportStatus ?? "ready") === "ready") {
+      try {
+        out = (await postJson<{ highlights: Highlight[] }>("/api/qa", { jd: resume.jd, highlights: verified, experiences: [exp] })).highlights;
+      } catch {
+        out = failQA(verified);
+      }
+    }
+    const h = out[0];
+    if (!h) throw new Error("核验没有返回结果，已保留原句");
+    const edited: Highlight = {
+      ...h,
+      selection: prev.selection,
+      requirementIds: prev.requirementIds,
+      edited: !restore,
+      generatedText: restore ? undefined : (prev.generatedText ?? prev.text),
+    };
+    if (edited.note && edited.text !== next) edited.note = `${edited.note}。要写进来源里没有的内容，请先到履历库补充这段经历的事实`;
+    // 以最新存储为准，只替换这一句（期间用户可能移出/放回了别的句子）
+    const latest = read<ResumeResult | null>(KEYS.resume, null) ?? resume;
+    if (latest.highlights[index]?.text !== prev.text) throw new Error("简历在改写期间发生了变化，已保留原样，请重新修改");
+    writeStored(KEYS.resume, { ...latest, highlights: latest.highlights.map((x, i) => (i === index ? { ...edited, selection: x.selection } : x)) });
+    update({ retrying: null });
+  } catch (e) {
+    update({ retrying: null, retryError: `修改没有保存：${(e as Error).message}` });
+  }
 }
 
 /** 把一句放进简历或移出简历（选材可恢复，不删除内容；02 R10、T15） */

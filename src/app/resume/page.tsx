@@ -7,7 +7,7 @@ import { isInAppBrowser, renderResume, saveFile, toPdf } from "@/lib/exportPdf";
 import { KEYS, useStored } from "@/lib/storage";
 import type { Experience, Highlight, Profile, ResumeResult } from "@/lib/types";
 import { isExportable, isIncluded, isInsufficient, markStale, needsInput } from "@/lib/validate";
-import { addFactAsBullet, experienceLabel, retryExperience, setSelection, useJobs } from "@/lib/jobs";
+import { addFactAsBullet, BULLET_MAX, editBullet, experienceLabel, retryExperience, setSelection, useJobs } from "@/lib/jobs";
 
 const EMPTY_PROFILE: Profile = { name: "", phone: "", email: "", school: "", birthday: "" };
 const FIELDS: [keyof Profile, string][] = [
@@ -30,6 +30,9 @@ export default function ResumePage() {
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
   const [longImage, setLongImage] = useState("");
+  // 正在改措辞的句子（resume.highlights 下标）和草稿
+  const [editing, setEditing] = useState<number | null>(null);
+  const [draft, setDraft] = useState("");
 
   async function exportPdf() {
     if (!articleRef.current || !exportable) return;
@@ -85,7 +88,7 @@ export default function ResumePage() {
         exp: e,
         items: ready.filter(({ h }) => isIncluded(h)),
         optional: ready.filter(({ h }) => !isIncluded(h)),
-        waiting: all.filter(({ h }) => !isExportable(h, resume)).map(({ h }) => h),
+        waiting: all.filter(({ h }) => !isExportable(h, resume)),
         unused: unusedOf(e, all.map(({ h }) => h)),
         disposition: dispositionOf.get(e.id),
         failed: failedIds.has(e.id),
@@ -225,7 +228,58 @@ export default function ResumePage() {
                           <div key={id} className="text-slate-500">{sourceLabel(id)}：「{h.sources?.[id] ?? factById.get(id)?.source}」</div>
                         ))}
                         {h.note && <div className="mt-1 text-amber-800">核验：{h.note}</div>}
-                        {h.originalText && <div className="text-slate-400">AI 初稿：{h.originalText}</div>}
+                        {h.originalText && <div className="text-slate-400">{h.edited ? "你改的版本" : "AI 初稿"}：{h.originalText}</div>}
+                        {h.edited && h.generatedText && <div className="text-slate-400">生成时的版本：{h.generatedText}</div>}
+                      </div>
+                      <div>
+                        <div className="font-semibold text-slate-600">改措辞</div>
+                        {editing === i ? (
+                          <div className="mt-1 space-y-2">
+                            <textarea
+                              className="w-full rounded-lg border border-line bg-white p-2 text-sm"
+                              rows={3}
+                              maxLength={BULLET_MAX}
+                              value={draft}
+                              onChange={(e) => setDraft(e.target.value)}
+                            />
+                            <p className="text-slate-500">只能依据上面列出的来源改写；改完会重新核验这一句，来源里没有的说法会被删去并说明原因。要写新内容，请先到履历库补充事实。</p>
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                variant="accent"
+                                className="!px-3 !py-1 text-xs"
+                                disabled={!!jobs.retrying || !!jobs.resume || !draft.trim() || draft.trim() === h.text}
+                                onClick={async () => {
+                                  await editBullet(i, draft);
+                                  setEditing(null);
+                                }}
+                              >
+                                {jobs.retrying === h.experienceId ? "核验中…" : "保存并核验"}
+                              </Button>
+                              <Button variant="ghost" className="!px-3 !py-1 text-xs" onClick={() => setEditing(null)} disabled={jobs.retrying === h.experienceId}>
+                                取消
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mt-1 flex flex-wrap gap-2">
+                            <Button
+                              variant="ghost"
+                              className="!px-3 !py-1 text-xs"
+                              disabled={!!jobs.retrying || !!jobs.resume}
+                              onClick={() => {
+                                setEditing(i);
+                                setDraft(h.text);
+                              }}
+                            >
+                              改这句的措辞
+                            </Button>
+                            {h.edited && h.generatedText && (
+                              <Button variant="ghost" className="!px-3 !py-1 text-xs" disabled={!!jobs.retrying || !!jobs.resume} onClick={() => editBullet(i, h.generatedText!, true)}>
+                                恢复生成的版本
+                              </Button>
+                            )}
+                          </div>
+                        )}
                       </div>
                       <div>
                         <div className="font-semibold text-slate-600">面试准备</div>
@@ -323,13 +377,18 @@ export default function ResumePage() {
               </div>
               {failed && <p className="text-xs text-amber-800">这段经历的简历句生成失败：模型请求出错或超时（不是你的经历有问题）。</p>}
               <ul className="space-y-1.5">
-                {items.map((h, i) => (
+                {items.map(({ h, i }) => (
                   <li key={i} className="text-slate-700">
                     <span className="mr-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-800">{statusText(h)}</span>
                     {h.text}
                     {h.note && <div className="text-xs text-amber-700">{h.note}</div>}
                     {h.issueType === "source_conflict" && (
                       <Link href="/vault" className="text-xs underline">去履历库核对来源</Link>
+                    )}
+                    {h.edited && h.generatedText && (
+                      <button className="ml-2 text-xs underline" disabled={!!jobs.retrying || !!jobs.resume} onClick={() => editBullet(i, h.generatedText!, true)}>
+                        恢复生成的版本
+                      </button>
                     )}
                   </li>
                 ))}
