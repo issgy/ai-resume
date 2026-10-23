@@ -148,6 +148,10 @@ export type Highlight = {
   note?: string;
   /** 核验时被缩小或退回原话前的候选句 */
   originalText?: string;
+  /** 用户改过措辞（02 R01：改写的表述单独存放，不覆盖履历原文） */
+  edited?: boolean;
+  /** 用户第一次改写前、生成时的句子，用于「恢复生成的版本」 */
+  generatedText?: string;
   assertionChecks?: AssertionCheck[];
   /** 面试追问生成失败（不影响亮点导出，可重试） */
   qaFailed?: boolean;
