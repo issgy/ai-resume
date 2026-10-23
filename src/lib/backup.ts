@@ -3,8 +3,7 @@
  * 只做结构校验，不改写任何文字内容。
  */
 import { KEYS } from "@/lib/storage";
-import { sanitizeEducation } from "@/lib/education";
-import type { Experience, Fact, Profile } from "@/lib/types";
+import type { Education, Experience, Fact, Profile } from "@/lib/types";
 
 export const BACKUP_APP = "ai-resume";
 export const BACKUP_VERSION = 1;
@@ -84,6 +83,15 @@ function sanitizeResume(x: unknown): Record<string, unknown> | null {
   );
   if (!okHighlights) return null;
   if (!optArr(x.dropped) || !optStrArr(x.failedExperienceIds) || !optArr(x.dispositions) || !optArr(x.unused) || !optStrArr(x.order) || !optArr(x.requirements) || !optArr(x.abilities)) return null;
+  // 页面会逐个读取这些列表的元素
+  const each = (arr: unknown, check: (v: Record<string, unknown>) => boolean) => arr === undefined || (arr as unknown[]).every((v) => isObj(v) && check(v));
+  const okLists =
+    each(x.dropped, (d) => typeof d.text === "string" && optStrArr(d.factIds)) &&
+    each(x.dispositions, (d) => typeof d.experienceId === "string" && typeof d.level === "string") &&
+    each(x.unused, (u) => typeof u.experienceId === "string" && typeof u.factId === "string") &&
+    each(x.requirements, (r) => typeof r.text === "string") &&
+    each(x.abilities, (a) => optStrArr(a.factIds));
+  if (!okLists) return null;
   if (x.match !== undefined && x.match !== null && !validMatch(x.match)) return null;
   // 旧版本可能没有 dropped，补成空列表
   return { ...x, dropped: x.dropped ?? [] };
@@ -123,9 +131,16 @@ export function parseBackup(json: string): ParsedBackup {
   if (raw[KEYS.education] != null) {
     if (!Array.isArray(raw[KEYS.education])) warnings.push("教育背景结构不对，没有导入（当前教育背景保留）");
     else {
-      const education = sanitizeEducation(raw[KEYS.education]);
-      const total = (raw[KEYS.education] as unknown[]).length;
-      if (total > education.length) warnings.push(`${total - education.length} 条教育背景缺少学校，已跳过`);
+      // 备份恢复只做结构校验：学校还没填的未完成记录也原样保留
+      const list = raw[KEYS.education] as unknown[];
+      const seen = new Set<string>();
+      const education: Education[] = list.flatMap((e) => {
+        if (!isObj(e) || !str(e.id) || seen.has(str(e.id))) return [];
+        seen.add(str(e.id));
+        const origin = e.origin === "imported" || e.origin === "manual" || e.origin === "edited" ? e.origin : undefined;
+        return [{ id: str(e.id), school: str(e.school), degree: str(e.degree), major: str(e.major), start: str(e.start), end: str(e.end), source: str(e.source), ...(origin ? { origin } : {}) }];
+      });
+      if (list.length > education.length) warnings.push(`${list.length - education.length} 条教育背景缺少编号或编号重复，已跳过`);
       data[KEYS.education] = education;
     }
   }
