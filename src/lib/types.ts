@@ -155,6 +155,8 @@ export type Highlight = {
   assertionChecks?: AssertionCheck[];
   /** 面试追问生成失败（不影响亮点导出，可重试） */
   qaFailed?: boolean;
+  /** 面试准备没生成的原因（如请求太频繁）；没有时按「生成出错」显示 */
+  qaError?: string;
   /** 这句对应的 JD 要求 id */
   requirementIds?: string[];
   /**

@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
+import { checkMessages, guard, inputErrorResponse } from "@/lib/guard";
 import { callLLMJson } from "@/lib/llm";
 import { EXTRACTOR } from "@/lib/prompts";
 import { sourceInUserText } from "@/lib/validate";
 import type { ChatMessage } from "@/lib/types";
 
-export const maxDuration = 60;
 
 type Extracted = {
   company: string;
@@ -15,7 +15,14 @@ type Extracted = {
 };
 
 export async function POST(req: Request) {
-  const { messages } = (await req.json()) as { messages: ChatMessage[] };
+  const g = await guard<{ messages: ChatMessage[] }>(req);
+  if ("res" in g) return g.res;
+  const { messages } = g.body;
+  try {
+    checkMessages(messages);
+  } catch (e) {
+    return inputErrorResponse(e)!;
+  }
   const transcript = messages.map((m) => `${m.role === "user" ? "用户" : "顾问"}：${m.content}`).join("\n");
   const userText = messages.filter((m) => m.role === "user").map((m) => m.content).join("\n");
 

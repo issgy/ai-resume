@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { checkExperiences, checkJd, checkList, guard, InputError, inputErrorResponse, LIMITS } from "@/lib/guard";
 import { callLLMJson } from "@/lib/llm";
 import { WRITER } from "@/lib/prompts";
 import { checkHighlights, isInstructionFact, tidyBullet } from "@/lib/validate";
@@ -7,15 +8,20 @@ import type { AbilityEvidence, Disposition, Experience, Highlight, Requirement, 
 const SELECTIONS: Selection[] = ["expanded", "condensed", "optional"];
 const LEVELS: Disposition["level"][] = ["expanded", "condensed", "optional"];
 
-export const maxDuration = 60;
 
 export async function POST(req: Request) {
-  const { jd, requirements, abilities, experiences } = (await req.json()) as {
-    jd: string;
-    requirements: unknown;
-    abilities?: unknown;
-    experiences: Experience[];
-  };
+  const g = await guard<{ jd: string; requirements: unknown; abilities?: unknown; experiences: Experience[] }>(req);
+  if ("res" in g) return g.res;
+  const { jd, requirements, abilities, experiences } = g.body;
+  try {
+    checkJd(jd);
+    checkExperiences(experiences);
+    checkList(requirements, LIMITS.requirements, "JD 要求");
+    checkList(abilities, LIMITS.abilities, "能力推断");
+    if (!Array.isArray(experiences)) throw new InputError("经历数据格式不正确");
+  } catch (e) {
+    return inputErrorResponse(e)!;
+  }
   // 匹配表来自浏览器存储：只取撰写需要的字段，事实 id 必须仍在履历库；状态只影响侧重，不放宽核验
   const facts = new Set(experiences.flatMap((e) => e.facts.map((f) => f.id)));
   // 只把用户已确认的能力推断交给撰写（R09）；未确认的推断不进入简历

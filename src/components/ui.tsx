@@ -52,9 +52,24 @@ export function httpError(status: number) {
   return `请求失败 ${status}，请重试`;
 }
 
+/** 带 HTTP 状态的请求错误：调用方据此区分「请求太频繁」（429）和模型出错 */
+export class RequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
+/** 是否被限流（每 10 分钟的 AI 请求次数用完了） */
+export function isRateLimited(e: unknown): e is RequestError {
+  return e instanceof RequestError && e.status === 429;
+}
+
 export async function postJson<T>(url: string, body: unknown): Promise<T> {
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({ error: httpError(res.status) }));
-  if (!res.ok || data.error) throw new Error(data.error ?? `请求失败 ${res.status}`);
+  if (!res.ok || data.error) throw new RequestError(data.error ?? `请求失败 ${res.status}`, res.status);
   return data as T;
 }

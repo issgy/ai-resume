@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { guard } from "@/lib/guard";
 import { callLLMJson } from "@/lib/llm";
 import { IMPORTER } from "@/lib/prompts";
 import { norm } from "@/lib/validate";
@@ -6,7 +7,6 @@ import { BULLET_RE, IMPORT_MAX, IMPORT_MIN, experienceKey, hasExperienceSection,
 import type { ImportResponse, ImportedEducation, ImportedExperience } from "@/lib/importText";
 import type { Profile } from "@/lib/types";
 
-export const maxDuration = 60;
 
 type Parsed = { profile?: Partial<Record<keyof Profile, unknown>>; experiences: unknown[]; education?: unknown };
 
@@ -34,7 +34,9 @@ const field = (v: unknown, original: string) => {
  * 带项目符号却没被归到任何经历的行放入「未归类」并提示用户核对，不会静默丢失。
  */
 export async function POST(req: Request) {
-  const { text: raw } = (await req.json()) as { text?: unknown };
+  const g = await guard<{ text?: unknown }>(req);
+  if ("res" in g) return g.res;
+  const { text: raw } = g.body ?? {};
   const text = str(raw);
   if (text.length < IMPORT_MIN) return NextResponse.json({ error: `内容太短（至少 ${IMPORT_MIN} 字）` }, { status: 400 });
   if (text.length > IMPORT_MAX) return NextResponse.json({ error: `内容太长（最多 ${IMPORT_MAX} 字）` }, { status: 400 });
