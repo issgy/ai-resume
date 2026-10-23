@@ -139,7 +139,7 @@ export default function ResumePage() {
   const education = byTimeDesc(educationRaw.filter((e) => e.school.trim() || e.major.trim() || e.degree.trim()));
   const educationFirst = resume.educationFirst ?? defaultEducationFirst(education);
   const squash = (x: string) => x.replace(/\s/g, "").toLowerCase();
-  const schoolInEducation = !!profile.school.trim() && education.some((e) => squash(e.school).includes(squash(profile.school)));
+  const schoolInEducation = !!profile.school.trim() && education.some((e) => squash(e.school) === squash(profile.school));
   function layoutKey() {
     return JSON.stringify([profile, education, educationFirst, verifiedSections.map(({ exp, items }) => [exp.company, exp.title, exp.start, exp.end, items.map(({ h }) => h.text)])]);
   }
