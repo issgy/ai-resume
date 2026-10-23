@@ -198,6 +198,8 @@ export type ResumeResult = {
   highlights: Highlight[];
   /** 用户为这份简历调整的经历顺序（经历 id）；没有时按履历库顺序。不改履历库 */
   order?: string[];
+  /** 教育背景放在工作经历前面（true）还是后面（false）；没设置时按是否在读 / 刚毕业自动判断 */
+  educationFirst?: boolean;
   dropped: DroppedHighlight[];
   /**
    * 经过内容核验流程生成（GAPS#2 之后）：可导出的条目只有 highlights 中逐条核验过的亮点，

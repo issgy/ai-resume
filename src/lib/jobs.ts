@@ -466,8 +466,9 @@ export async function runResume(match: MatchResult, experiences: Experience[]) {
       requirements,
       abilities,
       match,
-      // 重新生成时沿用用户调整过的经历顺序
+      // 重新生成时沿用用户调整过的经历顺序和教育背景位置
       order: read<ResumeResult | null>(KEYS.resume, null)?.order,
+      educationFirst: read<ResumeResult | null>(KEYS.resume, null)?.educationFirst,
     };
     writeStored(KEYS.resume, resume);
     if (onResumeDone) {
@@ -643,6 +644,23 @@ export function setOrder(order: string[] | undefined) {
   const resume = read<ResumeResult | null>(KEYS.resume, null);
   if (!resume) return;
   writeStored(KEYS.resume, { ...resume, order });
+}
+
+/** 教育背景放在工作经历前面还是后面（只影响本份简历） */
+export function setEducationFirst(educationFirst: boolean) {
+  const resume = read<ResumeResult | null>(KEYS.resume, null);
+  if (!resume) return;
+  writeStored(KEYS.resume, { ...resume, educationFirst });
+}
+
+/** 在读或毕业不到一年（应届 / 实习求职）时教育背景放在前面，这是中文简历的常见写法 */
+export function defaultEducationFirst(education: { start: string; end: string }[], now = new Date()): boolean {
+  const cur = now.getFullYear() * 12 + now.getMonth();
+  return education.some((e) => {
+    const end = monthKey(e.end);
+    if (end === null) return !e.end.trim() && (monthKey(e.start) ?? -Infinity) > cur - 48;
+    return end >= cur - 12;
+  });
 }
 
 /** 按这份简历的顺序排列经历：order 里有的在前，其余（新增的经历）按履历库顺序接在后面 */
