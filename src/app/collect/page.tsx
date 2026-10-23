@@ -367,7 +367,7 @@ function ChatCollect() {
         <Card className="animate-rise space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">确认入库内容</h2>
-            <span className="rounded-full bg-accent-soft px-3 py-1 text-xs font-medium text-accent">{draft.facts.length} 条事实</span>
+            <span className="inline-block whitespace-nowrap rounded-full bg-accent-soft px-3 py-1 text-xs font-medium text-accent">{draft.facts.length} 条事实</span>
           </div>
           <div className="grid gap-3 text-sm sm:grid-cols-2">
             {(["company", "title", "start", "end"] as const).map((k) => (

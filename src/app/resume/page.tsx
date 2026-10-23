@@ -257,7 +257,7 @@ export default function ResumePage() {
         )}
 
       {/* 简历正文：屏幕和打印共用 */}
-      <article ref={articleRef} className={`${exportable ? "" : "print:hidden"} mx-auto max-w-[210mm] rounded-2xl border border-line bg-white p-10 shadow-[0_30px_80px_-40px_rgb(20_40_35/0.35)] print:max-w-none print:rounded-none print:border-0 print:p-0 print:shadow-none`}>
+      <article ref={articleRef} className={`${exportable ? "" : "print:hidden"} mx-auto max-w-[210mm] rounded-2xl border border-line bg-white p-5 sm:p-10 shadow-[0_30px_80px_-40px_rgb(20_40_35/0.35)] print:max-w-none print:rounded-none print:border-0 print:p-0 print:shadow-none`}>
         <header className="mb-5 border-b border-slate-300 pb-4">
           <h1 className="text-3xl font-bold tracking-tight">{profile.name || "你的姓名"}</h1>
           <p className="mt-1 text-sm text-slate-600">
@@ -284,21 +284,22 @@ export default function ResumePage() {
         )}
         {verifiedSections.map(({ exp, items, disposition }, k) => (
           <section key={exp.id} className="mb-4 break-inside-avoid">
-            <div className="flex justify-between text-sm font-semibold">
-              <span>
-                {experienceLabel(exp)}
+            <div className="flex flex-col gap-0.5 text-sm font-semibold sm:flex-row sm:items-center sm:justify-between">
+              <span>{experienceLabel(exp)}</span>
+              {/* 手机上：日期在左、↑↓ 在右；桌面：↑↓ 在日期左边。↑↓ 不进入导出 */}
+              <span className="flex items-center justify-between gap-2 font-normal text-slate-500 sm:justify-end">
+                <span className="sm:order-2">{[exp.start, exp.end].filter(Boolean).join(" – ")}</span>
                 {verifiedSections.length > 1 && (
-                  <span className="no-print ml-1.5 inline-flex gap-0.5 align-middle text-[11px] font-normal text-muted">
-                    <button className="rounded px-1 hover:bg-paper disabled:opacity-30" title="上移" disabled={k === 0} onClick={() => move(exp.id, -1)}>↑</button>
-                    <button className="rounded px-1 hover:bg-paper disabled:opacity-30" title="下移" disabled={k === verifiedSections.length - 1} onClick={() => move(exp.id, 1)}>↓</button>
+                  <span className="no-print inline-flex gap-0.5 text-[11px] text-muted sm:order-1">
+                    <button className="rounded px-1 hover:bg-paper disabled:opacity-30" title="上移" aria-label="上移这段经历" disabled={k === 0} onClick={() => move(exp.id, -1)}>↑</button>
+                    <button className="rounded px-1 hover:bg-paper disabled:opacity-30" title="下移" aria-label="下移这段经历" disabled={k === verifiedSections.length - 1} onClick={() => move(exp.id, 1)}>↓</button>
                   </span>
                 )}
               </span>
-              <span className="font-normal text-slate-500">{[exp.start, exp.end].filter(Boolean).join(" – ")}</span>
             </div>
             {disposition && (
               <div className="no-print mt-0.5 text-[11px] text-muted">
-                <span className="mr-1 rounded-full bg-slate-100 px-1.5 py-0.5">{LEVEL[disposition.level]}</span>
+                <span className="inline-block whitespace-nowrap mr-1 rounded-full bg-slate-100 px-1.5 py-0.5">{LEVEL[disposition.level]}</span>
                 {disposition.reason}
               </div>
             )}
@@ -308,9 +309,9 @@ export default function ResumePage() {
                   <details className="group">
                     <summary className="cursor-pointer list-none before:mr-1 before:content-['•'] print:cursor-auto">
                       {h.text}
-                      <span className="no-print ml-1.5 rounded-full bg-accent-soft px-2 py-0.5 text-[11px] text-accent group-open:hidden">来源与追问</span>
+                      <span className="no-print ml-1.5 inline-block whitespace-nowrap rounded-full bg-accent-soft px-2 py-0.5 text-[11px] text-accent group-open:hidden">来源与追问</span>
                       {needsInput(h) > 0 && (
-                        <span className="no-print ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800 group-open:hidden">
+                        <span className="inline-block whitespace-nowrap no-print ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] text-amber-800 group-open:hidden">
                           {needsInput(h)} 个追问需补充
                         </span>
                       )}
@@ -398,12 +399,12 @@ export default function ResumePage() {
                             <div>Q：{q.q}</div>
                             {q.retryable ? (
                               <div className="text-slate-500">
-                                <span className="mr-1 rounded-full bg-slate-100 px-1.5 py-0.5">待更新</span>
+                                <span className="inline-block whitespace-nowrap mr-1 rounded-full bg-slate-100 px-1.5 py-0.5">待更新</span>
                                 参考回答暂不展示：{q.missingDetails?.[q.missingDetails.length - 1] ?? "模型出错或来源已修改"}
                               </div>
                             ) : isInsufficient(q) ? (
                               <div className="text-amber-800">
-                                <span className="mr-1 rounded-full bg-amber-100 px-1.5 py-0.5">需要你补充</span>
+                                <span className="inline-block whitespace-nowrap mr-1 rounded-full bg-amber-100 px-1.5 py-0.5">需要你补充</span>
                                 {q.missingDetails?.length ? `待补：${q.missingDetails.join("；")}。` : "你的原始描述里没有这道题的答案。"}
                                 AI 不代答；可以
                                 <Link href="/vault" className="underline underline-offset-2">到履历库补充细节</Link>，下次生成会用上。
@@ -483,7 +484,7 @@ export default function ResumePage() {
               <ul className="space-y-1.5">
                 {items.map(({ h, i }) => (
                   <li key={i} className="text-slate-700">
-                    <span className="mr-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-800">{statusText(h)}</span>
+                    <span className="inline-block whitespace-nowrap mr-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-800">{statusText(h)}</span>
                     {h.text}
                     {h.note && <div className="text-xs text-amber-700">{h.note}</div>}
                     {h.issueType === "source_conflict" && (
