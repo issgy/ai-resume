@@ -1,15 +1,17 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
-import { Button, Card, PageHeader } from "@/components/ui";
-import { KEYS, exportAll, importAll, uid, useStored } from "@/lib/storage";
+import { Button, Card, ErrorText, PageHeader } from "@/components/ui";
+import { KEYS, exportAll, importAll, read, uid, useStored } from "@/lib/storage";
+import { parseBackup } from "@/lib/backup";
 import type { Education, Experience, Fact } from "@/lib/types";
 
 export default function VaultPage() {
   const [experiences, setExperiences, loaded] = useStored<Experience[]>(KEYS.experiences, []);
   const [education, setEducation] = useStored<Education[]>(KEYS.education, []);
   const fileInput = useRef<HTMLInputElement>(null);
+  const [backupError, setBackupError] = useState("");
 
   /** 修改教育背景：导入的条目改过之后标为「手动修改」，原文仍保留 */
   function updateEdu(id: string, patch: Partial<Education>) {
@@ -41,12 +43,37 @@ export default function VaultPage() {
     URL.revokeObjectURL(a.href);
   }
 
+  /** 导入备份：先校验结构，列出要覆盖的内容和被跳过的条目，用户确认后才写入 */
   async function upload(file: File) {
+    setBackupError("");
     try {
-      importAll(await file.text());
+      const { data, summary, warnings } = parseBackup(await file.text());
+      const cur = read<Experience[]>(KEYS.experiences, []);
+      const keptNote = [
+        [KEYS.experiences, "履历库"],
+        [KEYS.education, "教育背景"],
+        [KEYS.profile, "个人信息"],
+        [KEYS.match, "JD 匹配"],
+        [KEYS.resume, "简历"],
+      ]
+        .filter(([k]) => !(k in data) && read(k, null) != null)
+        .map(([, label]) => label);
+      const lines = [
+        `当前履历库：${cur.length} 段经历、${cur.reduce((n, e) => n + e.facts.length, 0)} 条事实`,
+        `备份内容：${summary.experiences} 段经历、${summary.facts} 条事实、${summary.education} 条教育背景${summary.hasResume ? "、1 份简历" : ""}${summary.hasMatch ? "、1 份 JD 匹配" : ""}`,
+        ...(warnings.length ? ["", "以下内容不完整，不会导入：", ...warnings.map((w) => `· ${w}`)] : []),
+        ...(keptNote.length ? ["", "备份里没有、会保留当前的：" + keptNote.join("、")] : []),
+        ...(summary.hasResume || !read(KEYS.resume, null) ? [] : ["当前简历会保留；其中引用的事实如果不在备份里，相关句子会标为待处理、不会导出。"]),
+        "",
+        "导入会用备份覆盖当前对应的内容，且无法撤销。建议先「导出备份」保存当前资料。确定导入吗？",
+      ];
+      if (!confirm(lines.join("\n"))) return;
+      importAll(data);
       location.reload();
-    } catch {
-      alert("文件格式不正确");
+    } catch (e) {
+      setBackupError(`导入失败：${(e as Error).message}`);
+    } finally {
+      if (fileInput.current) fileInput.current.value = "";
     }
   }
 
@@ -69,6 +96,7 @@ export default function VaultPage() {
           </>
         }
       />
+      <ErrorText>{backupError}</ErrorText>
 
       <Card className="space-y-3">
         <div className="flex items-center justify-between gap-3">

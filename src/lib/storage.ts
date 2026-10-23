@@ -87,14 +87,40 @@ export function uid() {
 }
 
 export function exportAll(): string {
-  const data: Record<string, unknown> = {};
+  // app / version 用于导入时识别本站备份；旧备份没有这两个字段也能导入
+  const data: Record<string, unknown> = { app: "ai-resume", version: 1, exportedAt: new Date().toISOString() };
   for (const k of Object.values(KEYS)) data[k] = read(k, null);
   return JSON.stringify(data, null, 2);
 }
 
-export function importAll(json: string) {
-  const data = JSON.parse(json) as Record<string, unknown>;
-  for (const k of Object.values(KEYS)) {
-    if (data[k] != null) localStorage.setItem(k, JSON.stringify(data[k]));
+/**
+ * 写入已校验的备份（只写备份里有的项）。任何一项写入失败（如存储空间不足）就把已写的项恢复原样，
+ * 不留下一半新一半旧的数据。
+ */
+export function importAll(data: Partial<Record<string, unknown>>) {
+  const keys = Object.values(KEYS).filter((k) => data[k] !== undefined);
+  const before = new Map<string, string | null>(keys.map((k) => [k, localStorage.getItem(k)]));
+  const written: string[] = [];
+  try {
+    for (const k of keys) {
+      written.push(k);
+      localStorage.setItem(k, JSON.stringify(data[k]));
+    }
+  } catch {
+    // 先把已写入的新值全部移除腾出空间，再逆序恢复原值；逐项确认恢复成功
+    for (const k of written) localStorage.removeItem(k);
+    const failed: string[] = [];
+    for (const k of [...written].reverse()) {
+      const v = before.get(k) ?? null;
+      if (v === null) continue;
+      try {
+        localStorage.setItem(k, v);
+      } catch {
+        failed.push(k);
+      }
+      if (localStorage.getItem(k) !== v) failed.push(k);
+    }
+    if (failed.length === 0) throw new Error("浏览器存储空间不足，备份没有导入，原有资料保持不变");
+    throw new Error("浏览器存储空间不足，备份没有导入，且部分原有资料没能恢复；请先用之前导出的备份恢复");
   }
 }
