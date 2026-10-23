@@ -1,9 +1,10 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { Button, Card, ErrorText, PageHeader } from "@/components/ui";
-import { isInAppBrowser, renderResume, saveFile, toPdf } from "@/lib/exportPdf";
+import { isInAppBrowser, renderResume, saveFile, slicePages, toPdf } from "@/lib/exportPdf";
 import { KEYS, useStored } from "@/lib/storage";
 import type { Experience, Highlight, Profile, ResumeResult } from "@/lib/types";
 import { isExportable, isIncluded, isInsufficient, markStale, needsInput } from "@/lib/validate";
@@ -33,6 +34,9 @@ export default function ResumePage() {
   // 正在改措辞的句子（resume.highlights 下标）和草稿
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
+  // 分页预览：与导出的 PDF 用同一套分页结果
+  // 分页结果连同算出它时的版面键一起存；正文一变（句子、选材、顺序、基本信息、来源失效），旧页数和预览就不再显示
+  const [pageInfo, setPageInfo] = useState<{ count: number; key: string; pages?: string[] } | null>(null);
 
   async function exportPdf() {
     if (!articleRef.current || !exportable) return;
@@ -46,9 +50,25 @@ export default function ResumePage() {
         return;
       }
       const file = await toPdf(rendered, `${profile.name.trim() || "我的"}-简历.pdf`);
+      setPageInfo({ count: rendered.breaks.length + 1, key: layoutKey() });
       await saveFile(file);
     } catch (e) {
       setExportError(`导出失败：${(e as Error).message || "未知错误"}，请重试`);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function previewPages() {
+    if (!articleRef.current) return;
+    setExportError("");
+    setExporting(true);
+    try {
+      const rendered = await renderResume(articleRef.current);
+      const key = layoutKey();
+      setPageInfo({ count: rendered.breaks.length + 1, key, pages: slicePages(rendered).map((c) => c.toDataURL("image/jpeg", 0.8)) });
+    } catch (e) {
+      setExportError(`分页预览失败：${(e as Error).message || "未知错误"}，请重试`);
     } finally {
       setExporting(false);
     }
@@ -100,6 +120,14 @@ export default function ResumePage() {
   // 简历正文（屏幕、打印、PDF、长图）只放 ready 且选入简历的句子；可选内容、待处理、本次未生成的经历在正文之外列出，
   // 每段都有去向和原因、可以恢复，履历事实都不删除（02 R10、S5）
   const verifiedSections = sections.filter((s) => s.items.length > 0);
+  // 版面键：按实际导出的正文计算（来源失效的句子已被 markStale 移出）
+  function layoutKey() {
+    return JSON.stringify([profile, verifiedSections.map(({ exp, items }) => [exp.company, exp.title, exp.start, exp.end, items.map(({ h }) => h.text)])]);
+  }
+  const fresh = pageInfo?.key === layoutKey();
+  const pageCount = fresh ? pageInfo!.count : 0;
+  const pages = fresh ? (pageInfo!.pages ?? null) : null;
+  const setPages = (v: null) => setPageInfo(pageInfo && { ...pageInfo, pages: v ?? undefined });
   // 调整顺序：只在正文里的经历之间移动，其余经历的相对位置不变
   const RANK = { expanded: 0, condensed: 1, optional: 2 } as const;
   const applyVisibleOrder = (visibleIds: string[]) => {
@@ -158,7 +186,10 @@ export default function ResumePage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="accent" onClick={exportPdf} disabled={exporting || !exportable || verifiedSections.length === 0}>
-            {exporting ? "正在生成 PDF…" : "下载 PDF"}
+            {exporting ? "正在生成…" : "下载 PDF"}
+          </Button>
+          <Button variant="ghost" onClick={previewPages} disabled={exporting || verifiedSections.length === 0}>
+            分页预览
           </Button>
           {/* 打印只在桌面端提供；用外层控制显隐，避免和按钮自身的 inline-flex 冲突 */}
           <span className="hidden sm:inline">
@@ -177,11 +208,40 @@ export default function ResumePage() {
             有 {waiting.length} 段经历存在待处理内容（模型出错、来源已修改或与原话矛盾），不会导出，详见页面下方，可以逐段重试。
           </p>
         )}
+        {pageCount > 0 && (
+          <p className="text-xs text-muted">
+            按当前内容导出共 {pageCount} 页（A4）。{pageCount > 1 && "想压缩到 1 页，可以把相关度低的句子移出，或在「改措辞」里写得更简短。"}
+          </p>
+        )}
         <ErrorText>{jobs.retryError}</ErrorText>
         <ErrorText>{exportError}</ErrorText>
       </Card>
 
-      {longImage && (
+      {pages &&
+        createPortal(
+        <div className="no-print fixed inset-0 z-50 flex flex-col bg-ink/80 p-4 backdrop-blur-sm" onClick={() => setPages(null)}>
+          <div className="mx-auto mb-3 flex w-full max-w-2xl items-center justify-between gap-3 rounded-2xl bg-card p-4 text-sm" onClick={(e) => e.stopPropagation()}>
+            <div>
+              <p className="font-semibold">分页预览：共 {pages.length} 页</p>
+              <p className="mt-1 text-xs text-muted">和下载的 PDF 完全一致；分页只落在行与行之间，经历标题不会单独留在页底。</p>
+            </div>
+            <Button variant="ghost" onClick={() => setPages(null)}>关闭</Button>
+          </div>
+          <div className="mx-auto w-full max-w-2xl flex-1 space-y-4 overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            {pages.map((src, i) => (
+              <figure key={i} className="space-y-1">
+                <figcaption className="text-xs text-white/80">第 {i + 1} 页</figcaption>
+                {/* eslint-disable-next-line @next/next/no-img-element -- data URL 预览图 */}
+                <img src={src} alt={`第 ${i + 1} 页`} className="w-full rounded bg-white shadow" />
+              </figure>
+            ))}
+          </div>
+        </div>,
+          document.body,
+        )}
+
+      {longImage &&
+        createPortal(
         <div className="no-print fixed inset-0 z-50 flex flex-col bg-ink/80 p-4 backdrop-blur-sm" onClick={() => setLongImage("")}>
           <div className="mx-auto mb-3 w-full max-w-md rounded-2xl bg-card p-4 text-sm" onClick={(e) => e.stopPropagation()}>
             <p className="font-semibold">长按下方图片，保存到相册</p>
@@ -192,8 +252,9 @@ export default function ResumePage() {
             {/* eslint-disable-next-line @next/next/no-img-element -- data URL 长图，需要原生 img 才能长按保存 */}
             <img src={longImage} alt="简历长图" className="w-full bg-white" />
           </div>
-        </div>
-      )}
+        </div>,
+          document.body,
+        )}
 
       {/* 简历正文：屏幕和打印共用 */}
       <article ref={articleRef} className={`${exportable ? "" : "print:hidden"} mx-auto max-w-[210mm] rounded-2xl border border-line bg-white p-10 shadow-[0_30px_80px_-40px_rgb(20_40_35/0.35)] print:max-w-none print:rounded-none print:border-0 print:p-0 print:shadow-none`}>
