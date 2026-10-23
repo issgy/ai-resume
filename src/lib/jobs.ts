@@ -442,6 +442,8 @@ function writerInput(match: MatchResult | undefined, fallback: Requirement[], ex
 
 export async function runResume(match: MatchResult, experiences: Experience[]) {
   if (state.resume) return;
+  // 简历里有句子正在改写/重试时不重新生成，免得旧请求的结果写进新简历
+  if (state.retrying) return update({ error: "简历里有句子正在修改或重试，完成后再重新生成" });
   update({ resume: "resume", error: "", notice: null });
   markPending("resume", true);
   try {
@@ -593,7 +595,7 @@ export async function editBullet(index: number, text: string, restore = false) {
   if (!resume || !prev || !exp) return;
   const next = tidyBullet(text).trim();
   if (!next) return update({ retryError: "句子不能为空；不想要这句可以点「移出」" });
-  if (next.length > BULLET_MAX) return update({ retryError: `句子太长（最多 ${BULLET_MAX} 字）` });
+  if (!restore && next.length > BULLET_MAX) return update({ retryError: `句子太长（最多 ${BULLET_MAX} 字）` });
   update({ retrying: prev.experienceId, retryError: "" });
   try {
     const factIds = prev.factIds.filter((id) => exp.facts.some((f) => f.id === id));
@@ -615,13 +617,10 @@ export async function editBullet(index: number, text: string, restore = false) {
     }
     const h = out[0];
     if (!h) throw new Error("核验没有返回结果，已保留原句");
-    const edited: Highlight = {
-      ...h,
-      selection: prev.selection,
-      requirementIds: prev.requirementIds,
-      edited: !restore,
-      generatedText: restore ? undefined : (prev.generatedText ?? prev.text),
-    };
+    // 生成版本始终保留；只有恢复成功（核验通过且就是生成的原句）才去掉「改过」标记，恢复失败仍可再试
+    const generatedText = prev.generatedText ?? prev.text;
+    const restored = restore && (h.exportStatus ?? "ready") === "ready" && h.text === generatedText;
+    const edited: Highlight = { ...h, selection: prev.selection, requirementIds: prev.requirementIds, edited: !restored, generatedText };
     if (edited.note && edited.text !== next) edited.note = `${edited.note}。要写进来源里没有的内容，请先到履历库补充这段经历的事实`;
     // 以最新存储为准，只替换这一句（期间用户可能移出/放回了别的句子）
     const latest = read<ResumeResult | null>(KEYS.resume, null) ?? resume;
