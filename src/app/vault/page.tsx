@@ -49,10 +49,21 @@ export default function VaultPage() {
     try {
       const { data, summary, warnings } = parseBackup(await file.text());
       const cur = read<Experience[]>(KEYS.experiences, []);
+      const keptNote = [
+        [KEYS.experiences, "履历库"],
+        [KEYS.education, "教育背景"],
+        [KEYS.profile, "个人信息"],
+        [KEYS.match, "JD 匹配"],
+        [KEYS.resume, "简历"],
+      ]
+        .filter(([k]) => !(k in data) && read(k, null) != null)
+        .map(([, label]) => label);
       const lines = [
         `当前履历库：${cur.length} 段经历、${cur.reduce((n, e) => n + e.facts.length, 0)} 条事实`,
         `备份内容：${summary.experiences} 段经历、${summary.facts} 条事实、${summary.education} 条教育背景${summary.hasResume ? "、1 份简历" : ""}${summary.hasMatch ? "、1 份 JD 匹配" : ""}`,
         ...(warnings.length ? ["", "以下内容不完整，不会导入：", ...warnings.map((w) => `· ${w}`)] : []),
+        ...(keptNote.length ? ["", "备份里没有、会保留当前的：" + keptNote.join("、")] : []),
+        ...(summary.hasResume || !read(KEYS.resume, null) ? [] : ["当前简历会保留；其中引用的事实如果不在备份里，相关句子会标为待处理、不会导出。"]),
         "",
         "导入会用备份覆盖当前对应的内容，且无法撤销。建议先「导出备份」保存当前资料。确定导入吗？",
       ];

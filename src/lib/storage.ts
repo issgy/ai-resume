@@ -99,18 +99,28 @@ export function exportAll(): string {
  */
 export function importAll(data: Partial<Record<string, unknown>>) {
   const keys = Object.values(KEYS).filter((k) => data[k] !== undefined);
-  const before = new Map(keys.map((k) => [k, localStorage.getItem(k)] as const));
+  const before = new Map<string, string | null>(keys.map((k) => [k, localStorage.getItem(k)]));
+  const written: string[] = [];
   try {
-    for (const k of keys) localStorage.setItem(k, JSON.stringify(data[k]));
-  } catch {
-    for (const [k, v] of before) {
-      try {
-        if (v === null) localStorage.removeItem(k);
-        else localStorage.setItem(k, v);
-      } catch {
-        // 恢复原值不会比原来更占空间，这里基本不会失败
-      }
+    for (const k of keys) {
+      written.push(k);
+      localStorage.setItem(k, JSON.stringify(data[k]));
     }
-    throw new Error("浏览器存储空间不足，备份没有导入，原有资料保持不变");
+  } catch {
+    // 先把已写入的新值全部移除腾出空间，再逆序恢复原值；逐项确认恢复成功
+    for (const k of written) localStorage.removeItem(k);
+    const failed: string[] = [];
+    for (const k of [...written].reverse()) {
+      const v = before.get(k) ?? null;
+      if (v === null) continue;
+      try {
+        localStorage.setItem(k, v);
+      } catch {
+        failed.push(k);
+      }
+      if (localStorage.getItem(k) !== v) failed.push(k);
+    }
+    if (failed.length === 0) throw new Error("浏览器存储空间不足，备份没有导入，原有资料保持不变");
+    throw new Error("浏览器存储空间不足，备份没有导入，且部分原有资料没能恢复；请先用之前导出的备份恢复");
   }
 }

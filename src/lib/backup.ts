@@ -18,10 +18,11 @@ const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === 
 const str = (x: unknown) => (typeof x === "string" ? x : "");
 const ORIGINS = ["chat", "imported", "manual", "edited"] as const;
 
-function sanitizeExperiences(raw: unknown, warnings: string[]): Experience[] {
+/** 不是列表时返回 null：这一项不导入、保留当前资料（不能当成空列表把当前资料清空） */
+function sanitizeExperiences(raw: unknown, warnings: string[]): Experience[] | null {
   if (!Array.isArray(raw)) {
-    warnings.push("经历数据不是列表，已忽略");
-    return [];
+    warnings.push("经历数据结构不对，没有导入（当前履历库保留）");
+    return null;
   }
   let badExp = 0;
   let badFact = 0;
@@ -38,7 +39,8 @@ function sanitizeExperiences(raw: unknown, warnings: string[]): Experience[] {
     const facts: Fact[] = [];
     for (const f of Array.isArray(x.facts) ? x.facts : []) {
       const text = isObj(f) ? str(f.text) || str(f.source) : "";
-      if (!isObj(f) || !str(f.id) || !text.trim()) {
+      // 文字被清空但还保留着修改前原话的事实也要保留（R01：原始材料不能丢）
+      if (!isObj(f) || !str(f.id) || (!text.trim() && !str(f.originalSource).trim())) {
         badFact++;
         continue;
       }
@@ -59,21 +61,42 @@ function sanitizeExperiences(raw: unknown, warnings: string[]): Experience[] {
   return out;
 }
 
-/** 简历/匹配结果结构复杂：基本结构对不上就不导入（需要重新生成），不让页面报错 */
-function validResume(x: unknown, factIds: Set<string>): boolean {
-  if (!isObj(x) || typeof x.jd !== "string" || !Array.isArray(x.highlights)) return false;
-  return x.highlights.every(
+const optArr = (x: unknown) => x === undefined || Array.isArray(x);
+const optStrArr = (x: unknown) => x === undefined || (Array.isArray(x) && x.every((v) => typeof v === "string"));
+
+/**
+ * 简历：只校验页面实际读取的结构；结构不对就不导入（重新生成即可），不让页面报错。
+ * 引用的事实不在履历库里不算结构错误——页面的 markStale 会把这些句子标为「来源已修改，待重验」、不会导出，
+ * 其他句子、改过的措辞、选材和顺序照常恢复。
+ */
+function sanitizeResume(x: unknown): Record<string, unknown> | null {
+  if (!isObj(x) || typeof x.jd !== "string" || !Array.isArray(x.highlights)) return null;
+  const okHighlights = x.highlights.every(
     (h) =>
       isObj(h) &&
       typeof h.text === "string" &&
       typeof h.experienceId === "string" &&
-      Array.isArray(h.factIds) &&
-      h.factIds.every((id) => typeof id === "string" && factIds.has(id)) &&
-      Array.isArray(h.questions ?? []),
+      optStrArr(h.factIds) && Array.isArray(h.factIds) &&
+      Array.isArray(h.questions) &&
+      h.questions.every((q) => isObj(q) && typeof q.q === "string") &&
+      optStrArr(h.requirementIds) &&
+      (h.sources === undefined || isObj(h.sources)),
   );
+  if (!okHighlights) return null;
+  if (!optArr(x.dropped) || !optStrArr(x.failedExperienceIds) || !optArr(x.dispositions) || !optArr(x.unused) || !optStrArr(x.order) || !optArr(x.requirements) || !optArr(x.abilities)) return null;
+  if (x.match !== undefined && x.match !== null && !validMatch(x.match)) return null;
+  // 旧版本可能没有 dropped，补成空列表
+  return { ...x, dropped: x.dropped ?? [] };
 }
 function validMatch(x: unknown): boolean {
-  return isObj(x) && typeof x.jd === "string" && Array.isArray(x.requirements) && x.requirements.every((r) => isObj(r) && typeof r.text === "string");
+  return (
+    isObj(x) &&
+    typeof x.jd === "string" &&
+    Array.isArray(x.requirements) &&
+    x.requirements.every((r) => isObj(r) && typeof r.text === "string" && optArr(r.evidence) && optStrArr(r.factIds)) &&
+    optArr(x.abilities) &&
+    (x.abilities === undefined || (x.abilities as unknown[]).every((a) => isObj(a) && optStrArr(a.factIds)))
+  );
 }
 
 /** 解析并校验备份；不是本站备份、或没有任何可用内容时抛出可读的错误 */
@@ -98,10 +121,13 @@ export function parseBackup(json: string): ParsedBackup {
   const factIds = new Set((experiences ?? []).flatMap((e) => e.facts.map((f) => f.id)));
 
   if (raw[KEYS.education] != null) {
-    const education = sanitizeEducation(raw[KEYS.education]);
-    const total = Array.isArray(raw[KEYS.education]) ? (raw[KEYS.education] as unknown[]).length : 0;
-    if (total > education.length) warnings.push(`${total - education.length} 条教育背景缺少学校，已跳过`);
-    data[KEYS.education] = education;
+    if (!Array.isArray(raw[KEYS.education])) warnings.push("教育背景结构不对，没有导入（当前教育背景保留）");
+    else {
+      const education = sanitizeEducation(raw[KEYS.education]);
+      const total = (raw[KEYS.education] as unknown[]).length;
+      if (total > education.length) warnings.push(`${total - education.length} 条教育背景缺少学校，已跳过`);
+      data[KEYS.education] = education;
+    }
   }
   if (raw[KEYS.profile] != null) {
     const p = raw[KEYS.profile];
@@ -123,9 +149,9 @@ export function parseBackup(json: string): ParsedBackup {
     else warnings.push("JD 匹配结果结构不对，没有导入（重新分析即可）");
   }
   if (raw[KEYS.resume] != null) {
-    // 简历句引用的事实必须都在这份备份的履历库里，否则来源对不上
-    if (experiences && validResume(raw[KEYS.resume], factIds)) data[KEYS.resume] = raw[KEYS.resume];
-    else warnings.push("简历结果结构不对或引用的事实不在备份里，没有导入（重新生成即可）");
+    const resume = sanitizeResume(raw[KEYS.resume]);
+    if (resume) data[KEYS.resume] = resume;
+    else warnings.push("简历结果结构不对，没有导入（重新生成即可）");
   }
 
   const summary: BackupSummary = {
