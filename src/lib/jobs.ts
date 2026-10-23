@@ -1,7 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import { postJson } from "@/components/ui";
+import { isRateLimited, postJson } from "@/components/ui";
 import { KEYS, read, uid, writeStored } from "@/lib/storage";
 import { BULLET_RE, experienceKey, findSameExperience } from "@/lib/importText";
 import type { ImportResponse } from "@/lib/importText";
@@ -9,7 +9,7 @@ import type { AbilityEvidence, Education, Experience, Highlight, MatchResult, Pr
 import { educationKey } from "@/lib/education";
 import { refreshMatch } from "@/lib/matching";
 import type { AbilityDecisions } from "@/lib/matching";
-import { checkHighlights, failQA, failVerification, isInstructionFact, markStale, norm, tidyBullet } from "@/lib/validate";
+import { checkHighlights, failQA, failVerification, RATE_LIMITED_NOTE, isInstructionFact, markStale, norm, tidyBullet } from "@/lib/validate";
 
 /**
  * 「粘贴简历导入」「分析匹配」「生成定向简历」的后台任务。
@@ -389,7 +389,10 @@ export async function runMatch(jd: string, experiences: Experience[]) {
   }
 }
 
-type Generated = Pick<ResumeResult, "highlights" | "dropped" | "failedExperienceIds" | "dispositions" | "unused">;
+type Generated = Pick<ResumeResult, "highlights" | "dropped" | "failedExperienceIds" | "dispositions" | "unused"> & {
+  /** 核验或面试准备被限流时的提示（句子已生成，但还没核验 / 没有追问） */
+  rateLimited?: string;
+};
 
 /**
  * 撰写 → 逐句核验 → 面试准备。各阶段失败都按技术错误处理（02 S6、T14）：
@@ -405,13 +408,16 @@ async function generate(
   abilities: AbilityEvidence[] = [],
 ): Promise<Generated> {
   const data = await postJson<Generated>("/api/resume", { jd, requirements, abilities, experiences });
+  let rateLimited = "";
   let verified: Pick<ResumeResult, "highlights" | "dropped"> = { highlights: [], dropped: [] };
   if (data.highlights.length > 0) {
     onStage("verify");
     try {
       verified = await postJson<Pick<ResumeResult, "highlights" | "dropped">>("/api/verify", { highlights: data.highlights, experiences });
-    } catch {
-      verified = { highlights: failVerification(data.highlights), dropped: [] };
+    } catch (e) {
+      // 限流不是模型出错：句子保留为待核验，说明原因，稍后点「重试这段」即可
+      if (isRateLimited(e)) rateLimited = e.message;
+      verified = { highlights: failVerification(data.highlights, isRateLimited(e) ? RATE_LIMITED_NOTE : undefined), dropped: [] };
     }
   }
   let answered = verified.highlights;
@@ -421,7 +427,8 @@ async function generate(
     let withQA: Highlight[];
     try {
       withQA = (await postJson<{ highlights: Highlight[] }>("/api/qa", { jd, highlights: ready, experiences })).highlights;
-    } catch {
+    } catch (e) {
+      if (isRateLimited(e)) rateLimited = e.message;
       withQA = failQA(ready);
     }
     // 按顺序把面试准备结果放回原位置，非 ready 的句子原样保留
@@ -434,6 +441,7 @@ async function generate(
     failedExperienceIds: data.failedExperienceIds ?? [],
     dispositions: data.dispositions ?? [],
     unused: data.unused ?? [],
+    rateLimited: rateLimited || undefined,
   };
 }
 
@@ -477,6 +485,7 @@ export async function runResume(match: MatchResult, experiences: Experience[]) {
     } else {
       update({ resume: null, notice: { tone: "success", text: "定向简历已生成，点击查看", href: "/resume" } });
     }
+    if (data.rateLimited) update({ retryError: `${data.rateLimited}。简历句已生成，部分句子还没核验或没有面试追问，稍后点对应经历的「重试这段」即可` });
   } catch (e) {
     const message = (e as Error).message;
     update({ resume: null, error: message, notice: { tone: "error", text: `定向简历生成失败：${message}`, href: "/match" } });
@@ -509,6 +518,8 @@ export async function retryExperience(experienceId: string) {
       // 按当前确认记录和履历重新推导：撤销或已失效的推断不会再被用上
       const { requirements, abilities } = writerInput(latest.match, latest.requirements ?? [], experiences);
       const data = await generate(latest.jd, requirements, [exp], () => {}, abilities);
+      // 被限流时不写入半成品（还没核验），保留原状
+      if (data.rateLimited) throw new Error(data.rateLimited);
       if (data.highlights.length === 0) {
         update({ retrying: null, retryError: `「${label}」仍未生成成功（模型请求出错或没有返回内容），已保留原状，可以稍后再试` });
         return;
@@ -539,7 +550,8 @@ export async function retryExperience(experienceId: string) {
       let verified: Highlight[] = [];
       try {
         verified = (await postJson<{ highlights: Highlight[] }>("/api/verify", { highlights: verifiable, experiences: [exp] })).highlights;
-      } catch {
+      } catch (e) {
+        if (isRateLimited(e)) throw e;
         verified = failVerification(verifiable);
       }
       let k = 0;
@@ -561,7 +573,8 @@ export async function retryExperience(experienceId: string) {
       let withQA: Highlight[];
       try {
         withQA = (await postJson<{ highlights: Highlight[] }>("/api/qa", { jd: latest.jd, highlights: needQA.map((i) => next[i]), experiences: [exp] })).highlights;
-      } catch {
+      } catch (e) {
+        if (isRateLimited(e)) throw e;
         withQA = failQA(needQA.map((i) => next[i]));
       }
       needQA.forEach((i, j) => {
@@ -611,14 +624,16 @@ export async function editBullet(index: number, text: string, restore = false) {
     let verified: Highlight[];
     try {
       verified = (await postJson<{ highlights: Highlight[] }>("/api/verify", { highlights: kept, experiences: [exp] })).highlights;
-    } catch {
+    } catch (e) {
+      if (isRateLimited(e)) throw e;
       verified = failVerification(kept);
     }
     let out = verified;
     if (verified[0] && (verified[0].exportStatus ?? "ready") === "ready") {
       try {
         out = (await postJson<{ highlights: Highlight[] }>("/api/qa", { jd: resume.jd, highlights: verified, experiences: [exp] })).highlights;
-      } catch {
+      } catch (e) {
+        if (isRateLimited(e)) throw e;
         out = failQA(verified);
       }
     }
@@ -710,14 +725,16 @@ export async function addFactAsBullet(experienceId: string, factId: string) {
     let verified: Highlight[];
     try {
       verified = (await postJson<{ highlights: Highlight[] }>("/api/verify", { highlights: kept, experiences: [exp] })).highlights;
-    } catch {
+    } catch (e) {
+      if (isRateLimited(e)) throw e;
       verified = failVerification(kept);
     }
     let added = verified;
     if (verified[0] && (verified[0].exportStatus ?? "ready") === "ready") {
       try {
         added = (await postJson<{ highlights: Highlight[] }>("/api/qa", { jd: resume.jd, highlights: verified, experiences: [exp] })).highlights;
-      } catch {
+      } catch (e) {
+        if (isRateLimited(e)) throw e;
         added = failQA(verified);
       }
     }

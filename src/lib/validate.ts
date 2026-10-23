@@ -150,12 +150,13 @@ export function verdictPasses(v: VerifyVerdict): boolean {
   return v.issue === null && v.checks.every((c) => c.supported && !c.conflict);
 }
 
+export const RATE_LIMITED_NOTE = "AI 请求太频繁，这句暂未核验，不会导出；稍等几分钟后点「重试这段」";
 export const VERIFY_FAILED = "内容核验请求出错或超时，这句暂未核验，不会导出；可以点「重试」";
 export const QA_FAILED = "面试追问生成出错或超时，可以点「重试」";
 
 /** 核验调用失败（技术错误）：句子保留为待处理，不导出、可重试；不判为「找不到依据」 */
-export function failVerification(items: Highlight[]): Highlight[] {
-  return items.map((h) => ({ ...h, exportStatus: "pending", issueType: "technical_error", note: VERIFY_FAILED }));
+export function failVerification(items: Highlight[], note = VERIFY_FAILED): Highlight[] {
+  return items.map((h) => ({ ...h, exportStatus: "pending", issueType: "technical_error", note }));
 }
 
 /** 问答调用失败：只标记面试准备失败，简历句照常可用 */

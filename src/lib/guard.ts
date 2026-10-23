@@ -20,14 +20,20 @@ export const LIMITS = {
   facts: 400,
   factChars: 2_000,
   highlights: 120,
-  highlightChars: 1_000,
+  /** 核验退回原话时可能是几条事实原话拼起来的，比单条事实上限宽 */
+  highlightChars: 6_000,
   requirements: 80,
   abilities: 80,
-  messages: 120,
+  messages: 400,
   messageChars: 4_000,
+  /** 一段对话的总字数 */
+  transcriptChars: 80_000,
 } as const;
 
 const hits = new Map<string, number[]>();
+let lastSweep = 0;
+/** 计数表容量：超过后先清过期记录，仍超过才淘汰最早的访问者 */
+const MAX_KEYS = 20_000;
 
 /** 访问者标识：Vercel 会覆盖写入这几个请求头，客户端伪造的值不会被采用 */
 export function clientKey(req: Request): string {
@@ -44,14 +50,24 @@ export function takeToken(key: string, now = Date.now()): number {
   }
   recent.push(now);
   hits.set(key, recent);
-  // 防止内存无限增长：访问者过多时清掉已经过期的记录
-  if (hits.size > 5_000) for (const [k, ts] of hits) if (!ts.some((t) => now - t < RATE_WINDOW_MS)) hits.delete(k);
+  // 防止内存无限增长：每分钟最多清理一次过期记录；仍超过容量时淘汰最早写入的访问者
+  if (hits.size > 5_000 && now - lastSweep > 60_000) {
+    lastSweep = now;
+    for (const [k, ts] of hits) if (!ts.some((t) => now - t < RATE_WINDOW_MS)) hits.delete(k);
+  }
+  if (hits.size > MAX_KEYS) {
+    for (const k of hits.keys()) {
+      if (hits.size <= MAX_KEYS) break;
+      if (k !== key) hits.delete(k);
+    }
+  }
   return 0;
 }
 
 /** 仅测试用：清空计数 */
 export function resetRateLimit() {
   hits.clear();
+  lastSweep = 0;
 }
 
 export class InputError extends Error {}
@@ -66,7 +82,7 @@ export async function guard<T>(req: Request): Promise<{ body: T } | { res: NextR
   const wait = takeToken(clientKey(req));
   if (wait > 0) {
     const minutes = Math.max(1, Math.ceil(wait / 60_000));
-    return { res: fail(`操作太频繁（每 10 分钟最多 ${RATE_LIMIT} 次 AI 请求），请 ${minutes} 分钟后再试；你的内容都已保存`, 429, { "Retry-After": String(Math.ceil(wait / 1000)) }) };
+    return { res: fail(`操作太频繁（每 10 分钟最多 ${RATE_LIMIT} 次 AI 请求），请 ${minutes} 分钟后再试`, 429, { "Retry-After": String(Math.ceil(wait / 1000)) }) };
   }
   const declared = Number(req.headers.get("content-length") ?? 0);
   if (declared > BODY_MAX_BYTES) return { res: fail("提交的内容太多，请精简后再试", 413) };
@@ -118,7 +134,8 @@ export function checkList(x: unknown, max: number, label: string): void {
 
 export function checkMessages(ms: unknown): void {
   if (!Array.isArray(ms)) throw new InputError("对话记录格式不正确");
-  if (ms.length > LIMITS.messages) throw new InputError(`这段对话太长了（最多 ${LIMITS.messages} 条），请先「整理成经历」再开始新的一段`);
+  if (ms.length > LIMITS.messages || ms.reduce((n, m) => n + strLen(m?.content), 0) > LIMITS.transcriptChars)
+    throw new InputError("这段对话太长，没法一次整理；可以把要点复制到「粘贴简历」里导入，或开始新的一段对话");
   if (ms.some((m) => !m || typeof m.content !== "string" || (m.role !== "user" && m.role !== "assistant"))) throw new InputError("对话记录格式不正确");
   if (ms.some((m) => m.content.length > LIMITS.messageChars)) throw new InputError(`单条消息最多 ${LIMITS.messageChars} 字`);
 }
