@@ -6,9 +6,22 @@ import Link from "next/link";
 import { Button, Card, ErrorText, PageHeader } from "@/components/ui";
 import { isInAppBrowser, renderResume, saveFile, slicePages, toPdf } from "@/lib/exportPdf";
 import { KEYS, useStored } from "@/lib/storage";
-import type { Experience, Highlight, Profile, ResumeResult } from "@/lib/types";
+import type { Education, Experience, Highlight, Profile, ResumeResult } from "@/lib/types";
 import { isExportable, isIncluded, isInsufficient, markStale, needsInput } from "@/lib/validate";
-import { addFactAsBullet, BULLET_MAX, byTimeDesc, editBullet, experienceLabel, orderExperiences, retryExperience, setOrder, setSelection, useJobs } from "@/lib/jobs";
+import {
+  addFactAsBullet,
+  BULLET_MAX,
+  byTimeDesc,
+  defaultEducationFirst,
+  editBullet,
+  experienceLabel,
+  orderExperiences,
+  retryExperience,
+  setEducationFirst,
+  setOrder,
+  setSelection,
+  useJobs,
+} from "@/lib/jobs";
 
 const EMPTY_PROFILE: Profile = { name: "", phone: "", email: "", school: "", birthday: "" };
 const FIELDS: [keyof Profile, string][] = [
@@ -23,6 +36,7 @@ export default function ResumePage() {
   const [experiences, , loaded] = useStored<Experience[]>(KEYS.experiences, []);
   const [profile, setProfile] = useStored<Profile>(KEYS.profile, EMPTY_PROFILE);
   const [stored] = useStored<ResumeResult | null>(KEYS.resume, null);
+  const [educationRaw] = useStored<Education[]>(KEYS.education, []);
   const resume = stored && markStale(stored, experiences);
   const jobs = useJobs();
   // 内容核验上线前生成的简历没有经过核验，只能查看，不能导出
@@ -121,9 +135,30 @@ export default function ResumePage() {
   // 每段都有去向和原因、可以恢复，履历事实都不删除（02 R10、S5）
   const verifiedSections = sections.filter((s) => s.items.length > 0);
   // 版面键：按实际导出的正文计算（来源失效的句子已被 markStale 移出）
+  // 教育背景：履历库里填写的学校/专业/学历/时间，按时间倒序；放在工作经历前面还是后面
+  const education = byTimeDesc(educationRaw.filter((e) => e.school.trim() || e.major.trim() || e.degree.trim()));
+  const educationFirst = resume.educationFirst ?? defaultEducationFirst(education);
+  const squash = (x: string) => x.replace(/\s/g, "").toLowerCase();
+  const schoolInEducation = !!profile.school.trim() && education.some((e) => squash(e.school) === squash(profile.school));
   function layoutKey() {
-    return JSON.stringify([profile, verifiedSections.map(({ exp, items }) => [exp.company, exp.title, exp.start, exp.end, items.map(({ h }) => h.text)])]);
+    return JSON.stringify([profile, education, educationFirst, verifiedSections.map(({ exp, items }) => [exp.company, exp.title, exp.start, exp.end, items.map(({ h }) => h.text)])]);
   }
+  const educationBlock = education.length > 0 && (
+    <section className={`break-inside-avoid ${educationFirst ? "mb-5" : "mt-5"}`}>
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">教育背景</h2>
+        <button className="no-print rounded-full px-2 py-0.5 text-[11px] text-muted hover:bg-paper" onClick={() => setEducationFirst(!educationFirst)}>
+          {educationFirst ? "移到工作经历后面" : "移到工作经历前面"}
+        </button>
+      </div>
+      {education.map((e) => (
+        <div key={e.id} className="mb-1 flex flex-col gap-0.5 text-sm sm:flex-row sm:justify-between">
+          <span className="font-semibold">{[e.school, e.major, e.degree].filter((x) => x.trim()).join(" · ")}</span>
+          <span className="text-slate-500">{[e.start, e.end].filter((x) => x.trim()).join(" – ")}</span>
+        </div>
+      ))}
+    </section>
+  );
   const fresh = pageInfo?.key === layoutKey();
   const pageCount = fresh ? pageInfo!.count : 0;
   const pages = fresh ? (pageInfo!.pages ?? null) : null;
@@ -261,9 +296,11 @@ export default function ResumePage() {
         <header className="mb-5 border-b border-slate-300 pb-4">
           <h1 className="text-3xl font-bold tracking-tight">{profile.name || "你的姓名"}</h1>
           <p className="mt-1 text-sm text-slate-600">
-            {[profile.phone, profile.email, profile.school, profile.birthday].filter(Boolean).join(" ｜ ") || "电话 ｜ 邮箱 ｜ 院校"}
+            {/* 教育背景栏里已经写了这所学校时，抬头不再重复；否则保留（不丢学校信息） */}
+            {[profile.phone, profile.email, schoolInEducation ? "" : profile.school, profile.birthday].filter(Boolean).join(" ｜ ") || "电话 ｜ 邮箱 ｜ 院校"}
           </p>
         </header>
+        {educationFirst && educationBlock}
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">工作经历</h2>
           {verifiedSections.length > 1 && (
@@ -425,6 +462,7 @@ export default function ResumePage() {
             </ul>
           </section>
         ))}
+        {!educationFirst && educationBlock}
       </article>
 
       {/* 正文之外：本份简历没放进去的内容（低相关可选、用户移出、没写进句子的事实），都可以恢复 */}
