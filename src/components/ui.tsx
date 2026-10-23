@@ -11,7 +11,7 @@ export function Button({ className = "", variant = "primary", ...props }: Button
   }[variant];
   return (
     <button
-      className={`inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 ${styles} ${className}`}
+      className={`inline-flex max-w-full items-center justify-center gap-1.5 rounded-full px-4 py-2 text-sm font-medium transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40 ${styles} ${className}`}
       {...props}
     />
   );

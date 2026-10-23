@@ -154,7 +154,7 @@ export default function ResumePage() {
   const notGenerated = sections.filter((s) => !s.generated && !s.failed);
   const LEVEL = { expanded: "高相关·展开", condensed: "次相关·压缩", optional: "低相关·可选" } as const;
   const retryButton = (expId: string, label = "重试这段") => (
-    <Button variant="ghost" className="!px-3 !py-1 text-xs" onClick={() => retryExperience(expId)} disabled={!!jobs.retrying || !!jobs.resume}>
+    <Button variant="ghost" className="shrink-0 whitespace-nowrap !px-3 !py-1 text-xs" onClick={() => retryExperience(expId)} disabled={!!jobs.retrying || !!jobs.resume}>
       {jobs.retrying === expId ? "重试中…" : label}
     </Button>
   );
@@ -351,7 +351,7 @@ export default function ResumePage() {
                             <div className="flex flex-wrap gap-2">
                               <Button
                                 variant="accent"
-                                className="!px-3 !py-1 text-xs"
+                                className="shrink-0 whitespace-nowrap !px-3 !py-1 text-xs"
                                 disabled={!!jobs.retrying || !!jobs.resume || !draft.trim() || draft.trim() === h.text}
                                 onClick={async () => {
                                   await editBullet(i, draft);
@@ -360,7 +360,7 @@ export default function ResumePage() {
                               >
                                 {jobs.retrying === h.experienceId ? "核验中…" : "保存并核验"}
                               </Button>
-                              <Button variant="ghost" className="!px-3 !py-1 text-xs" onClick={() => setEditing(null)} disabled={jobs.retrying === h.experienceId}>
+                              <Button variant="ghost" className="shrink-0 whitespace-nowrap !px-3 !py-1 text-xs" onClick={() => setEditing(null)} disabled={jobs.retrying === h.experienceId}>
                                 取消
                               </Button>
                             </div>
@@ -369,7 +369,7 @@ export default function ResumePage() {
                           <div className="mt-1 flex flex-wrap gap-2">
                             <Button
                               variant="ghost"
-                              className="!px-3 !py-1 text-xs"
+                              className="shrink-0 whitespace-nowrap !px-3 !py-1 text-xs"
                               disabled={!!jobs.retrying || !!jobs.resume}
                               onClick={() => {
                                 setEditing(i);
@@ -379,7 +379,7 @@ export default function ResumePage() {
                               改这句的措辞
                             </Button>
                             {h.edited && h.generatedText && (
-                              <Button variant="ghost" className="!px-3 !py-1 text-xs" disabled={!!jobs.retrying || !!jobs.resume} onClick={() => editBullet(i, h.generatedText!, true)}>
+                              <Button variant="ghost" className="shrink-0 whitespace-nowrap !px-3 !py-1 text-xs" disabled={!!jobs.retrying || !!jobs.resume} onClick={() => editBullet(i, h.generatedText!, true)}>
                                 恢复生成的版本
                               </Button>
                             )}
@@ -447,7 +447,7 @@ export default function ResumePage() {
                       {h.text}
                       <span className="ml-1 text-xs text-muted">{h.selection === "hidden_by_user" ? "（你移出的）" : "（低相关，可选）"}</span>
                     </span>
-                    <Button variant="ghost" className="!px-3 !py-1 text-xs" onClick={() => setSelection(i, "expanded")}>放进简历</Button>
+                    <Button variant="ghost" className="shrink-0 whitespace-nowrap !px-3 !py-1 text-xs" onClick={() => setSelection(i, "expanded")}>放进简历</Button>
                   </li>
                 ))}
                 {unused.map((u) => {
@@ -458,7 +458,7 @@ export default function ResumePage() {
                         {f.text}
                         <span className="ml-1 text-xs text-muted">（未写进句子：{u.reason}）</span>
                       </span>
-                      <Button variant="ghost" className="!px-3 !py-1 text-xs" onClick={() => addFactAsBullet(exp.id, u.factId)} disabled={!!jobs.retrying}>
+                      <Button variant="ghost" className="shrink-0 whitespace-nowrap !px-3 !py-1 text-xs" onClick={() => addFactAsBullet(exp.id, u.factId)} disabled={!!jobs.retrying}>
                         {jobs.retrying === exp.id ? "加入中…" : "加入简历"}
                       </Button>
                     </li>

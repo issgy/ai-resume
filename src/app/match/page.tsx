@@ -231,11 +231,11 @@ export default function MatchPage() {
                       <span className="flex gap-1.5">
                         {a.confirmation === "pending" ? (
                           <>
-                            <Button variant="ghost" className="!px-3 !py-1 text-xs" onClick={() => decide(a, "confirmed")}>认可</Button>
-                            <Button variant="ghost" className="!px-3 !py-1 text-xs" onClick={() => decide(a, "rejected")}>不认可</Button>
+                            <Button variant="ghost" className="shrink-0 whitespace-nowrap !px-3 !py-1 text-xs" onClick={() => decide(a, "confirmed")}>认可</Button>
+                            <Button variant="ghost" className="shrink-0 whitespace-nowrap !px-3 !py-1 text-xs" onClick={() => decide(a, "rejected")}>不认可</Button>
                           </>
                         ) : (
-                          <Button variant="ghost" className="!px-3 !py-1 text-xs" onClick={() => decide(a, null)}>撤销</Button>
+                          <Button variant="ghost" className="shrink-0 whitespace-nowrap !px-3 !py-1 text-xs" onClick={() => decide(a, null)}>撤销</Button>
                         )}
                       </span>
                     </div>
