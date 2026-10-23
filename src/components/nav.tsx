@@ -7,10 +7,10 @@ import { Logo } from "@/components/logo";
 import { dismissNotice, useJobs } from "@/lib/jobs";
 
 const nav = [
-  { href: "/collect", label: "录入经历" },
-  { href: "/vault", label: "履历库" },
-  { href: "/match", label: "JD 匹配" },
-  { href: "/resume", label: "简历导出" },
+  { href: "/collect", label: "录入经历", short: "录入" },
+  { href: "/vault", label: "履历库", short: "履历库" },
+  { href: "/match", label: "JD 匹配", short: "匹配" },
+  { href: "/resume", label: "简历导出", short: "简历" },
 ];
 
 export function Nav() {
@@ -31,11 +31,12 @@ export function Nav() {
   }, [notice, pathname]);
 
   return (
-    <header className="no-print sticky top-0 z-20 px-4 pt-4">
-      <nav className="mx-auto flex max-w-5xl items-center gap-1 overflow-x-auto [scrollbar-width:none] rounded-full border border-line bg-card/75 p-1.5 text-sm shadow-[0_8px_30px_rgb(0_0_0/0.05)] backdrop-blur-xl">
-        <Link href="/" className="mr-2 flex shrink-0 items-center gap-2 rounded-full py-1.5 pl-2 pr-3 font-bold tracking-tight">
+    // 手机上导航随页面滚走，不吸顶遮挡正文；桌面端吸顶（04「浮动导航不遮正文」）
+    <header className="no-print relative top-0 z-20 px-3 pt-3 sm:sticky sm:px-4 sm:pt-4">
+      <nav className="mx-auto flex max-w-5xl items-center justify-between gap-0.5 overflow-x-auto [scrollbar-width:none] rounded-full border border-line bg-card/75 p-1.5 text-sm shadow-[0_8px_30px_rgb(0_0_0/0.05)] backdrop-blur-xl sm:justify-start sm:gap-1">
+        <Link href="/" aria-label="有据简历首页" className="flex shrink-0 items-center gap-2 rounded-full py-1.5 pl-1.5 pr-1.5 font-bold tracking-tight sm:mr-2 sm:pl-2 sm:pr-3">
           <Logo />
-          有据简历
+          <span className="hidden sm:inline">有据简历</span>
         </Link>
         {nav.map((n, i) => {
           const active = pathname === n.href;
@@ -43,12 +44,13 @@ export function Nav() {
             <Link
               key={n.href}
               href={n.href}
-              className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 transition ${
+              className={`flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1.5 transition sm:gap-1.5 sm:px-3 ${
                 active ? "bg-brand text-white shadow-[0_6px_20px_-8px_rgb(15_118_110/0.7)]" : "text-ink-soft hover:bg-paper"
               }`}
             >
               <span className={`font-mono text-[11px] ${active ? "text-white/60" : "text-muted"}`}>0{i + 1}</span>
-              {n.label}
+              <span className="sm:hidden">{n.short}</span>
+              <span className="hidden sm:inline">{n.label}</span>
             </Link>
           );
         })}

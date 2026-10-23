@@ -65,6 +65,23 @@ body {
 }
 .animate-rise { animation: rise 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
 
+/* 吸顶导航（桌面端）不遮挡跳转、聚焦到的内容 */
+html {
+  scroll-padding-top: 6rem;
+}
+@media (max-width: 639px) {
+  html {
+    scroll-padding-top: 1rem;
+  }
+}
+/* 触屏设备或窄屏：按钮点击区域至少 32×32（04「手机视口下表单和操作可用」） */
+@media (pointer: coarse), (max-width: 639px) {
+  button {
+    min-height: 2rem;
+    min-width: 2rem;
+  }
+}
+
 @media print {
   body { background: #fff; }
   .no-print { display: none !important; }
