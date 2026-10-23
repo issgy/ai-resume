@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
+import { checkExperiences, checkHighlights, checkJd, guard, InputError, inputErrorResponse } from "@/lib/guard";
 import { callLLMJson } from "@/lib/llm";
 import { QA_WRITER } from "@/lib/prompts";
 import { callVerifier } from "@/lib/verifier";
 import { checkAnswer, failQA, isInsufficient, needsDetails, parseQuestions, pickQuestions, verdictPasses } from "@/lib/validate";
 import type { Experience, Highlight, QA } from "@/lib/types";
 
-export const maxDuration = 60;
 
 /**
  * 面试准备（交接包 03-M6、02 InterviewItem）：只为可导出（ready）的简历句生成，每句单独一次调用、全部并行。
@@ -14,7 +14,17 @@ export const maxDuration = 60;
  * - 面试准备的任何结果（包括调用失败）都不改变简历句的导出状态，也不删除事实（R07）
  */
 export async function POST(req: Request) {
-  const { jd, highlights, experiences } = (await req.json()) as { jd: string; highlights: Highlight[]; experiences: Experience[] };
+  const g = await guard<{ jd: string; highlights: Highlight[]; experiences: Experience[] }>(req);
+  if ("res" in g) return g.res;
+  const { jd, highlights, experiences } = g.body;
+  try {
+    checkJd(jd);
+    checkHighlights(highlights);
+    checkExperiences(experiences);
+    if (!Array.isArray(highlights) || !Array.isArray(experiences)) throw new InputError("请求格式不正确");
+  } catch (e) {
+    return inputErrorResponse(e)!;
+  }
 
   const results = await Promise.all(
     highlights.map(async (h): Promise<Highlight> => {

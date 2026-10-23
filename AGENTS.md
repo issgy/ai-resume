@@ -7,6 +7,7 @@
 - 数据只存浏览器 localStorage，无登录、无数据库
 - LLM 走 OpenAI 兼容接口，配置见 README.md 与 `.env.example`
 - 产品需求：`docs/PRD.md`；验收差距与待办：`docs/GAPS.md`
+- 接口：实现写在 `src/server/api/<名称>.ts`，统一经 `src/app/api/[route]/route.ts` 分发（网址仍是 `/api/<名称>`，部署为同一个函数，频率计数才能跨接口合计）。新增调用模型的接口必须注册到 `HANDLERS`，并在读取请求体前调用 `src/lib/guard.ts` 的 `guard()`，再按需调用 `checkJd/checkExperiences/checkHighlights/checkMessages` 等输入上限检查
 
 ## 常用命令
 - 开发：`npm run dev`

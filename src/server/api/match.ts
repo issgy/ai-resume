@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { checkExperiences, checkJd, checkList, guard, InputError, inputErrorResponse, LIMITS } from "@/lib/guard";
 import { callLLMJson } from "@/lib/llm";
 import { sanitizeEducation } from "@/lib/education";
 import { normalizeMatch } from "@/lib/matching";
@@ -6,10 +7,19 @@ import { isInstructionFact } from "@/lib/validate";
 import { MATCHER } from "@/lib/prompts";
 import type { Experience } from "@/lib/types";
 
-export const maxDuration = 60;
 
 export async function POST(req: Request) {
-  const { jd, experiences, education: rawEducation } = (await req.json()) as { jd: string; experiences: Experience[]; education?: unknown };
+  const g = await guard<{ jd: string; experiences: Experience[]; education?: unknown }>(req);
+  if ("res" in g) return g.res;
+  const { jd, experiences, education: rawEducation } = g.body;
+  try {
+    checkJd(jd);
+    checkExperiences(experiences);
+    checkList(rawEducation, LIMITS.experiences, "教育背景");
+    if (!Array.isArray(experiences)) throw new InputError("经历数据格式不正确");
+  } catch (e) {
+    return inputErrorResponse(e)!;
+  }
   const education = sanitizeEducation(rawEducation);
   if (!jd || jd.trim().length < 50) {
     return NextResponse.json({ error: "JD 内容太短，请粘贴完整的岗位描述（职责 + 要求）" }, { status: 400 });

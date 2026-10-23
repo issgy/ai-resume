@@ -246,7 +246,12 @@ function ChatCollect() {
       });
       if (!res.ok || !res.body) {
         // 我们自己的路由返回纯文本错误；平台层（如 504）返回 HTML，统一换成可读提示
-        const text = res.headers.get("content-type")?.startsWith("text/plain") ? await res.text() : "";
+        const type = res.headers.get("content-type") ?? "";
+        const text = type.startsWith("text/plain")
+          ? await res.text()
+          : type.startsWith("application/json")
+            ? ((await res.json().catch(() => null))?.error ?? "")
+            : "";
         throw new Error(text || httpError(res.status));
       }
       const reader = res.body.getReader();

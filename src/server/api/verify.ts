@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
+import { checkExperiences, checkHighlights, guard, InputError, inputErrorResponse } from "@/lib/guard";
 import { callVerifier } from "@/lib/verifier";
 import { verifyExperience } from "@/lib/verifyFlow";
 import type { DroppedHighlight, Experience, Highlight } from "@/lib/types";
 
-export const maxDuration = 60;
 
 /**
  * 逐句事实核验（交接包 03-M5、02 S6）：
@@ -15,7 +15,16 @@ export const maxDuration = 60;
  * 任何情况都不删除履历事实；一句有问题不影响同一经历的其他句子。
  */
 export async function POST(req: Request) {
-  const { highlights, experiences } = (await req.json()) as { highlights: Highlight[]; experiences: Experience[] };
+  const g = await guard<{ highlights: Highlight[]; experiences: Experience[] }>(req);
+  if ("res" in g) return g.res;
+  const { highlights, experiences } = g.body;
+  try {
+    checkHighlights(highlights);
+    checkExperiences(experiences);
+    if (!Array.isArray(highlights) || !Array.isArray(experiences)) throw new InputError("请求格式不正确");
+  } catch (e) {
+    return inputErrorResponse(e)!;
+  }
 
   const groups = experiences
     .map((exp) => ({ exp, items: highlights.filter((h) => h.experienceId === exp.id) }))
