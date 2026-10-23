@@ -183,10 +183,14 @@ const NOTE_RE =
   /^\s*(#{2,}.*|(todo|tbd)\b.*|((证据|材料|数据|内容|细节|成果|结果|量化)\s*)?(待收集|待补充|待完善|待确认|待核实|待整理)[。.!！]?|此处填写.*|(示例文字|占位(符|内容)?)[。.]?|下一(个|段)?(项目|经历)[:：]?)\s*$/i;
 
 /** 时间归一到「年-月」，只用于疑似重复判断（「2025-06」「2025.06」「2025年6月」视为同一月），不改原文 */
+const EN_MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 export function monthKey(s: string): number | null {
   const m = s.match(/((?:19|20)\d{2})\s*(?:[-./年]\s*(\d{1,2}))?/);
-  if (!m) return /至今|现在|present|now/i.test(s) ? Infinity : null;
-  return Number(m[1]) * 12 + (m[2] ? Number(m[2]) - 1 : 0);
+  if (!m) return /至今|现在|present|now|current/i.test(s) ? Infinity : null;
+  // 英文月份（「Sep 2025」「2025 Sep」「September 2025」）
+  const en = !m[2] && s.toLowerCase().match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?/);
+  const month = m[2] ? Number(m[2]) - 1 : en ? EN_MONTHS.indexOf(en[1]) : 0;
+  return Number(m[1]) * 12 + month;
 }
 function overlaps(a: { start: string; end: string }, b: { start: string; end: string }): boolean {
   const as = monthKey(a.start), bs = monthKey(b.start);
