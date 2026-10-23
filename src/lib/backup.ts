@@ -1,0 +1,140 @@
+/**
+ * 备份文件校验（交接包 F12）：导入前检查结构，剔除缺字段的条目并说明，避免损坏或无关文件让页面报错或静默覆盖资料。
+ * 只做结构校验，不改写任何文字内容。
+ */
+import { KEYS } from "@/lib/storage";
+import { sanitizeEducation } from "@/lib/education";
+import type { Experience, Fact, Profile } from "@/lib/types";
+
+export const BACKUP_APP = "ai-resume";
+export const BACKUP_VERSION = 1;
+/** 备份文件上限：正常备份远小于此，超过多半不是本站的备份 */
+export const BACKUP_MAX_BYTES = 5 * 1024 * 1024;
+
+export type BackupSummary = { experiences: number; facts: number; education: number; hasResume: boolean; hasMatch: boolean };
+export type ParsedBackup = { data: Partial<Record<(typeof KEYS)[keyof typeof KEYS], unknown>>; summary: BackupSummary; warnings: string[] };
+
+const isObj = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x);
+const str = (x: unknown) => (typeof x === "string" ? x : "");
+const ORIGINS = ["chat", "imported", "manual", "edited"] as const;
+
+function sanitizeExperiences(raw: unknown, warnings: string[]): Experience[] {
+  if (!Array.isArray(raw)) {
+    warnings.push("经历数据不是列表，已忽略");
+    return [];
+  }
+  let badExp = 0;
+  let badFact = 0;
+  let dupFact = 0;
+  const seenExp = new Set<string>();
+  const seenFact = new Set<string>();
+  const out: Experience[] = [];
+  for (const x of raw) {
+    if (!isObj(x) || !str(x.id) || seenExp.has(str(x.id))) {
+      badExp++;
+      continue;
+    }
+    seenExp.add(str(x.id));
+    const facts: Fact[] = [];
+    for (const f of Array.isArray(x.facts) ? x.facts : []) {
+      const text = isObj(f) ? str(f.text) || str(f.source) : "";
+      if (!isObj(f) || !str(f.id) || !text.trim()) {
+        badFact++;
+        continue;
+      }
+      // 事实 id 是简历句、匹配证据引用来源的依据，重复会让来源对错，只保留第一条
+      if (seenFact.has(str(f.id))) {
+        dupFact++;
+        continue;
+      }
+      seenFact.add(str(f.id));
+      const origin = ORIGINS.find((o) => o === f.origin);
+      facts.push({ id: str(f.id), text, source: str(f.source) || text, ...(origin ? { origin } : {}), ...(str(f.originalSource) ? { originalSource: str(f.originalSource) } : {}) });
+    }
+    out.push({ id: str(x.id), company: str(x.company), title: str(x.title), start: str(x.start), end: str(x.end), facts });
+  }
+  if (badExp) warnings.push(`${badExp} 段经历缺少编号或编号重复，已跳过`);
+  if (badFact) warnings.push(`${badFact} 条事实缺少编号或内容，已跳过`);
+  if (dupFact) warnings.push(`${dupFact} 条事实编号重复，只保留了第一条`);
+  return out;
+}
+
+/** 简历/匹配结果结构复杂：基本结构对不上就不导入（需要重新生成），不让页面报错 */
+function validResume(x: unknown, factIds: Set<string>): boolean {
+  if (!isObj(x) || typeof x.jd !== "string" || !Array.isArray(x.highlights)) return false;
+  return x.highlights.every(
+    (h) =>
+      isObj(h) &&
+      typeof h.text === "string" &&
+      typeof h.experienceId === "string" &&
+      Array.isArray(h.factIds) &&
+      h.factIds.every((id) => typeof id === "string" && factIds.has(id)) &&
+      Array.isArray(h.questions ?? []),
+  );
+}
+function validMatch(x: unknown): boolean {
+  return isObj(x) && typeof x.jd === "string" && Array.isArray(x.requirements) && x.requirements.every((r) => isObj(r) && typeof r.text === "string");
+}
+
+/** 解析并校验备份；不是本站备份、或没有任何可用内容时抛出可读的错误 */
+export function parseBackup(json: string): ParsedBackup {
+  if (json.length > BACKUP_MAX_BYTES) throw new Error("文件太大，不像是本站导出的备份");
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    throw new Error("文件不是有效的 JSON，可能已损坏");
+  }
+  if (!isObj(raw)) throw new Error("文件结构不对，不是本站导出的备份");
+  if (raw.app !== undefined && raw.app !== BACKUP_APP) throw new Error("这是其他应用的备份文件");
+  if (typeof raw.version === "number" && raw.version > BACKUP_VERSION) throw new Error("备份来自更新版本的网站，请刷新页面后再导入");
+  if (!Object.values(KEYS).some((k) => k in raw)) throw new Error("文件里没有履历库数据，不是本站导出的备份");
+
+  const warnings: string[] = [];
+  const data: ParsedBackup["data"] = {};
+  // 导出时没有数据的项是 null：不导入，也不算错误
+  const experiences = raw[KEYS.experiences] != null ? sanitizeExperiences(raw[KEYS.experiences], warnings) : null;
+  if (experiences) data[KEYS.experiences] = experiences;
+  const factIds = new Set((experiences ?? []).flatMap((e) => e.facts.map((f) => f.id)));
+
+  if (raw[KEYS.education] != null) {
+    const education = sanitizeEducation(raw[KEYS.education]);
+    const total = Array.isArray(raw[KEYS.education]) ? (raw[KEYS.education] as unknown[]).length : 0;
+    if (total > education.length) warnings.push(`${total - education.length} 条教育背景缺少学校，已跳过`);
+    data[KEYS.education] = education;
+  }
+  if (raw[KEYS.profile] != null) {
+    const p = raw[KEYS.profile];
+    if (isObj(p)) data[KEYS.profile] = { name: str(p.name), phone: str(p.phone), email: str(p.email), school: str(p.school), birthday: str(p.birthday) } satisfies Profile;
+    else warnings.push("个人信息结构不对，已忽略");
+  }
+  if (raw[KEYS.chat] != null) {
+    const chat = raw[KEYS.chat];
+    if (Array.isArray(chat) && chat.every((m) => isObj(m) && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")) data[KEYS.chat] = chat;
+    else warnings.push("对话记录结构不对，已忽略");
+  }
+  if (raw[KEYS.abilityDecisions] != null) {
+    if (isObj(raw[KEYS.abilityDecisions])) data[KEYS.abilityDecisions] = raw[KEYS.abilityDecisions];
+    else warnings.push("能力确认记录结构不对，已忽略");
+  }
+  if (typeof raw[KEYS.jdDraft] === "string") data[KEYS.jdDraft] = raw[KEYS.jdDraft];
+  if (raw[KEYS.match] != null) {
+    if (validMatch(raw[KEYS.match])) data[KEYS.match] = raw[KEYS.match];
+    else warnings.push("JD 匹配结果结构不对，没有导入（重新分析即可）");
+  }
+  if (raw[KEYS.resume] != null) {
+    // 简历句引用的事实必须都在这份备份的履历库里，否则来源对不上
+    if (experiences && validResume(raw[KEYS.resume], factIds)) data[KEYS.resume] = raw[KEYS.resume];
+    else warnings.push("简历结果结构不对或引用的事实不在备份里，没有导入（重新生成即可）");
+  }
+
+  const summary: BackupSummary = {
+    experiences: experiences?.length ?? 0,
+    facts: factIds.size,
+    education: Array.isArray(data[KEYS.education]) ? (data[KEYS.education] as unknown[]).length : 0,
+    hasResume: KEYS.resume in data,
+    hasMatch: KEYS.match in data,
+  };
+  if (Object.keys(data).length === 0) throw new Error("备份里没有可以导入的内容");
+  return { data, summary, warnings };
+}
