@@ -183,10 +183,14 @@ const NOTE_RE =
   /^\s*(#{2,}.*|(todo|tbd)\b.*|((证据|材料|数据|内容|细节|成果|结果|量化)\s*)?(待收集|待补充|待完善|待确认|待核实|待整理)[。.!！]?|此处填写.*|(示例文字|占位(符|内容)?)[。.]?|下一(个|段)?(项目|经历)[:：]?)\s*$/i;
 
 /** 时间归一到「年-月」，只用于疑似重复判断（「2025-06」「2025.06」「2025年6月」视为同一月），不改原文 */
-function monthKey(s: string): number | null {
+const EN_MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+export function monthKey(s: string): number | null {
   const m = s.match(/((?:19|20)\d{2})\s*(?:[-./年]\s*(\d{1,2}))?/);
-  if (!m) return /至今|现在|present|now/i.test(s) ? Infinity : null;
-  return Number(m[1]) * 12 + (m[2] ? Number(m[2]) - 1 : 0);
+  if (!m) return /至今|现在|present|now|current/i.test(s) ? Infinity : null;
+  // 英文月份（「Sep 2025」「2025 Sep」「September 2025」）
+  const en = !m[2] && s.toLowerCase().match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?/);
+  const month = m[2] ? Number(m[2]) - 1 : en ? EN_MONTHS.indexOf(en[1]) : 0;
+  return Number(m[1]) * 12 + month;
 }
 function overlaps(a: { start: string; end: string }, b: { start: string; end: string }): boolean {
   const as = monthKey(a.start), bs = monthKey(b.start);
@@ -462,6 +466,8 @@ export async function runResume(match: MatchResult, experiences: Experience[]) {
       requirements,
       abilities,
       match,
+      // 重新生成时沿用用户调整过的经历顺序
+      order: read<ResumeResult | null>(KEYS.resume, null)?.order,
     };
     writeStored(KEYS.resume, resume);
     if (onResumeDone) {
@@ -630,6 +636,35 @@ export async function editBullet(index: number, text: string, restore = false) {
   } catch (e) {
     update({ retrying: null, retryError: `修改没有保存：${(e as Error).message}` });
   }
+}
+
+/** 保存这份简历的经历顺序（只影响本份简历和导出，不改履历库）；传 undefined 恢复为履历库顺序 */
+export function setOrder(order: string[] | undefined) {
+  const resume = read<ResumeResult | null>(KEYS.resume, null);
+  if (!resume) return;
+  writeStored(KEYS.resume, { ...resume, order });
+}
+
+/** 按这份简历的顺序排列经历：order 里有的在前，其余（新增的经历）按履历库顺序接在后面 */
+export function orderExperiences<T extends { id: string }>(experiences: T[], order: string[] | undefined): T[] {
+  if (!order?.length) return experiences;
+  const pos = new Map(order.map((id, i) => [id, i]));
+  return experiences
+    .map((e, i) => ({ e, k: pos.get(e.id) ?? order.length + i }))
+    .sort((a, b) => a.k - b.k)
+    .map(({ e }) => e);
+}
+
+/** 时间倒序：结束时间（至今最新）→ 开始时间，都没有时间的放最后，同时间保持原顺序 */
+export function byTimeDesc<T extends { start: string; end: string }>(experiences: T[]): T[] {
+  const key = (e: T) => {
+    const end = monthKey(e.end) ?? (e.end.trim() ? null : monthKey(e.start));
+    return [end ?? -Infinity, monthKey(e.start) ?? -Infinity];
+  };
+  return experiences
+    .map((e, i) => ({ e, i, k: key(e) }))
+    .sort((a, b) => b.k[0] - a.k[0] || b.k[1] - a.k[1] || a.i - b.i)
+    .map(({ e }) => e);
 }
 
 /** 把一句放进简历或移出简历（选材可恢复，不删除内容；02 R10、T15） */

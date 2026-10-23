@@ -7,7 +7,7 @@ import { isInAppBrowser, renderResume, saveFile, toPdf } from "@/lib/exportPdf";
 import { KEYS, useStored } from "@/lib/storage";
 import type { Experience, Highlight, Profile, ResumeResult } from "@/lib/types";
 import { isExportable, isIncluded, isInsufficient, markStale, needsInput } from "@/lib/validate";
-import { addFactAsBullet, BULLET_MAX, editBullet, experienceLabel, retryExperience, setSelection, useJobs } from "@/lib/jobs";
+import { addFactAsBullet, BULLET_MAX, byTimeDesc, editBullet, experienceLabel, orderExperiences, retryExperience, setOrder, setSelection, useJobs } from "@/lib/jobs";
 
 const EMPTY_PROFILE: Profile = { name: "", phone: "", email: "", school: "", birthday: "" };
 const FIELDS: [keyof Profile, string][] = [
@@ -79,7 +79,9 @@ export default function ResumePage() {
     const rest = e.facts.filter((f) => !cited.has(f.id)).map((f) => ({ experienceId: e.id, factId: f.id, reason: resume.unused ? "生成简历后新增，或本次没有写入" : "旧版简历没有使用这条" }));
     return [...listed, ...rest];
   };
-  const sections = experiences
+  // 经历顺序只属于这份简历（resume.order）；没调整过时按履历库顺序
+  const ordered = orderExperiences(experiences, resume.order);
+  const sections = ordered
     .filter((e) => e.facts.length > 0)
     .map((e) => {
       const all = indexed.filter(({ h }) => h.experienceId === e.id);
@@ -98,6 +100,27 @@ export default function ResumePage() {
   // 简历正文（屏幕、打印、PDF、长图）只放 ready 且选入简历的句子；可选内容、待处理、本次未生成的经历在正文之外列出，
   // 每段都有去向和原因、可以恢复，履历事实都不删除（02 R10、S5）
   const verifiedSections = sections.filter((s) => s.items.length > 0);
+  // 调整顺序：只在正文里的经历之间移动，其余经历的相对位置不变
+  const RANK = { expanded: 0, condensed: 1, optional: 2 } as const;
+  const applyVisibleOrder = (visibleIds: string[]) => {
+    const visible = new Set(visibleIds);
+    let k = 0;
+    setOrder(ordered.map((e) => (visible.has(e.id) ? visibleIds[k++] : e.id)));
+  };
+  const move = (id: string, delta: -1 | 1) => {
+    const ids = verifiedSections.map((x) => x.exp.id);
+    const i = ids.indexOf(id);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    applyVisibleOrder(ids);
+  };
+  const sortByTime = () => setOrder(byTimeDesc(ordered).map((e) => e.id));
+  const sortByRelevance = () => {
+    const timeRank = new Map(byTimeDesc(ordered).map((e, i) => [e.id, i]));
+    const rank = (id: string) => RANK[dispositionOf.get(id)?.level ?? "optional"] ?? 3;
+    setOrder([...ordered].sort((a, b) => rank(a.id) - rank(b.id) || timeRank.get(a.id)! - timeRank.get(b.id)!).map((e) => e.id));
+  };
   const optionalSections = sections.filter((s) => s.optional.length > 0 || s.unused.length > 0);
   const waiting = sections.filter((s) => s.waiting.length > 0 || s.failed);
   const notGenerated = sections.filter((s) => !s.generated && !s.failed);
@@ -180,16 +203,36 @@ export default function ResumePage() {
             {[profile.phone, profile.email, profile.school, profile.birthday].filter(Boolean).join(" ｜ ") || "电话 ｜ 邮箱 ｜ 院校"}
           </p>
         </header>
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">工作经历</h2>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">工作经历</h2>
+          {verifiedSections.length > 1 && (
+            <div className="no-print flex flex-wrap items-center gap-1 text-[11px] text-muted">
+              排序：
+              <button className="rounded-full px-2 py-0.5 hover:bg-paper" onClick={sortByTime}>按时间倒序</button>
+              <button className="rounded-full px-2 py-0.5 hover:bg-paper" onClick={sortByRelevance}>按相关度</button>
+              {resume.order && (
+                <button className="rounded-full px-2 py-0.5 hover:bg-paper" onClick={() => setOrder(undefined)}>恢复履历库顺序</button>
+              )}
+            </div>
+          )}
+        </div>
         {verifiedSections.length === 0 && (
           <p className="no-print rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
             暂无可导出的简历句，请查看下方待处理内容，或<Link href="/match" className="underline">重新生成</Link>。
           </p>
         )}
-        {verifiedSections.map(({ exp, items, disposition }) => (
+        {verifiedSections.map(({ exp, items, disposition }, k) => (
           <section key={exp.id} className="mb-4 break-inside-avoid">
             <div className="flex justify-between text-sm font-semibold">
-              <span>{experienceLabel(exp)}</span>
+              <span>
+                {experienceLabel(exp)}
+                {verifiedSections.length > 1 && (
+                  <span className="no-print ml-1.5 inline-flex gap-0.5 align-middle text-[11px] font-normal text-muted">
+                    <button className="rounded px-1 hover:bg-paper disabled:opacity-30" title="上移" disabled={k === 0} onClick={() => move(exp.id, -1)}>↑</button>
+                    <button className="rounded px-1 hover:bg-paper disabled:opacity-30" title="下移" disabled={k === verifiedSections.length - 1} onClick={() => move(exp.id, 1)}>↓</button>
+                  </span>
+                )}
+              </span>
               <span className="font-normal text-slate-500">{[exp.start, exp.end].filter(Boolean).join(" – ")}</span>
             </div>
             {disposition && (

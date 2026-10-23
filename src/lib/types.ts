@@ -196,6 +196,8 @@ export type MatchResult = {
 export type ResumeResult = {
   jd: string;
   highlights: Highlight[];
+  /** 用户为这份简历调整的经历顺序（经历 id）；没有时按履历库顺序。不改履历库 */
+  order?: string[];
   dropped: DroppedHighlight[];
   /**
    * 经过内容核验流程生成（GAPS#2 之后）：可导出的条目只有 highlights 中逐条核验过的亮点，
