@@ -60,6 +60,7 @@ function sanitizeExperiences(raw: unknown, warnings: string[]): Experience[] | n
   return out;
 }
 
+const optStr = (x: unknown) => x === undefined || typeof x === "string";
 const optArr = (x: unknown) => x === undefined || Array.isArray(x);
 const optStrArr = (x: unknown) => x === undefined || (Array.isArray(x) && x.every((v) => typeof v === "string"));
 
@@ -86,9 +87,9 @@ function sanitizeResume(x: unknown): Record<string, unknown> | null {
   // 页面会逐个读取这些列表的元素
   const each = (arr: unknown, check: (v: Record<string, unknown>) => boolean) => arr === undefined || (arr as unknown[]).every((v) => isObj(v) && check(v));
   const okLists =
-    each(x.dropped, (d) => typeof d.text === "string" && optStrArr(d.factIds)) &&
-    each(x.dispositions, (d) => typeof d.experienceId === "string" && typeof d.level === "string") &&
-    each(x.unused, (u) => typeof u.experienceId === "string" && typeof u.factId === "string") &&
+    each(x.dropped, (d) => typeof d.text === "string" && optStr(d.reason) && optStrArr(d.factIds)) &&
+    each(x.dispositions, (d) => typeof d.experienceId === "string" && typeof d.level === "string" && optStr(d.reason)) &&
+    each(x.unused, (u) => typeof u.experienceId === "string" && typeof u.factId === "string" && optStr(u.reason)) &&
     each(x.requirements, (r) => typeof r.text === "string") &&
     each(x.abilities, (a) => optStrArr(a.factIds));
   if (!okLists) return null;
