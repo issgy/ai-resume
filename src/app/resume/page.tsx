@@ -138,6 +138,8 @@ export default function ResumePage() {
   // 教育背景：履历库里填写的学校/专业/学历/时间，按时间倒序；放在工作经历前面还是后面
   const education = byTimeDesc(educationRaw.filter((e) => e.school.trim() || e.major.trim() || e.degree.trim()));
   const educationFirst = resume.educationFirst ?? defaultEducationFirst(education);
+  const squash = (x: string) => x.replace(/\s/g, "").toLowerCase();
+  const schoolInEducation = !!profile.school.trim() && education.some((e) => squash(e.school).includes(squash(profile.school)));
   function layoutKey() {
     return JSON.stringify([profile, education, educationFirst, verifiedSections.map(({ exp, items }) => [exp.company, exp.title, exp.start, exp.end, items.map(({ h }) => h.text)])]);
   }
@@ -294,8 +296,8 @@ export default function ResumePage() {
         <header className="mb-5 border-b border-slate-300 pb-4">
           <h1 className="text-3xl font-bold tracking-tight">{profile.name || "你的姓名"}</h1>
           <p className="mt-1 text-sm text-slate-600">
-            {/* 有教育背景栏时，抬头不再重复学校 */}
-            {[profile.phone, profile.email, education.length ? "" : profile.school, profile.birthday].filter(Boolean).join(" ｜ ") || "电话 ｜ 邮箱 ｜ 院校"}
+            {/* 教育背景栏里已经写了这所学校时，抬头不再重复；否则保留（不丢学校信息） */}
+            {[profile.phone, profile.email, schoolInEducation ? "" : profile.school, profile.birthday].filter(Boolean).join(" ｜ ") || "电话 ｜ 邮箱 ｜ 院校"}
           </p>
         </header>
         {educationFirst && educationBlock}

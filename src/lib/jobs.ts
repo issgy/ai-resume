@@ -659,7 +659,7 @@ export function defaultEducationFirst(education: { start: string; end: string }[
   return education.some((e) => {
     const end = monthKey(e.end);
     if (end === null) return !e.end.trim() && (monthKey(e.start) ?? -Infinity) > cur - 48;
-    return end >= cur - 12;
+    return end > cur - 12;
   });
 }
 
