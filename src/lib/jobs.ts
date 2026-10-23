@@ -429,7 +429,7 @@ async function generate(
       withQA = (await postJson<{ highlights: Highlight[] }>("/api/qa", { jd, highlights: ready, experiences })).highlights;
     } catch (e) {
       if (isRateLimited(e)) rateLimited = e.message;
-      withQA = failQA(ready);
+      withQA = failQA(ready, isRateLimited(e) ? "AI 请求太频繁，面试追问还没生成" : undefined);
     }
     // 按顺序把面试准备结果放回原位置，非 ready 的句子原样保留
     let k = 0;

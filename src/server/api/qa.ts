@@ -67,7 +67,7 @@ export async function POST(req: Request) {
       const withSources = questions.map((qa) =>
         isInsufficient(qa) ? qa : { ...qa, sources: Object.fromEntries(exp.facts.filter((f) => (qa.factIds ?? []).includes(f.id)).map((f) => [f.id, f.source])) },
       );
-      return { ...h, questions: pickQuestions(withSources), qaFailed: false };
+      return { ...h, questions: pickQuestions(withSources), qaFailed: false, qaError: undefined };
     }),
   );
 

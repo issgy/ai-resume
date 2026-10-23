@@ -160,8 +160,9 @@ export function failVerification(items: Highlight[], note = VERIFY_FAILED): High
 }
 
 /** 问答调用失败：只标记面试准备失败，简历句照常可用 */
-export function failQA(items: Highlight[]): Highlight[] {
-  return items.map((h) => ({ ...h, questions: [], qaFailed: true }));
+export function failQA(items: Highlight[], reason?: string): Highlight[] {
+  // 每次失败都覆盖原因：之前是限流、这次是模型出错时，不能沿用旧原因
+  return items.map((h) => ({ ...h, questions: [], qaFailed: true, qaError: reason }));
 }
 
 /** 解析模型返回的追问；q 必须是非空字符串，a 允许为空（表示来源不足） */

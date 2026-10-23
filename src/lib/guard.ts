@@ -32,8 +32,9 @@ export const LIMITS = {
 
 const hits = new Map<string, number[]>();
 let lastSweep = 0;
-/** 计数表容量：超过后先清过期记录，仍超过才淘汰最早的访问者 */
+/** 计数表容量：满了以后新来的访问者共用一个「溢出」计数，不删除仍在窗口内的记录（不重置别人的额度） */
 const MAX_KEYS = 20_000;
+const OVERFLOW_KEY = "__overflow__";
 
 /** 访问者标识：Vercel 会覆盖写入这几个请求头，客户端伪造的值不会被采用 */
 export function clientKey(req: Request): string {
@@ -42,7 +43,13 @@ export function clientKey(req: Request): string {
 }
 
 /** 记一次请求；超过上限时返回需要等待的毫秒数，否则返回 0 */
-export function takeToken(key: string, now = Date.now()): number {
+export function takeToken(rawKey: string, now = Date.now()): number {
+  if (hits.size > 5_000 && now - lastSweep > 60_000) {
+    // 防止内存无限增长：每分钟最多清理一次过期记录
+    lastSweep = now;
+    for (const [k, ts] of hits) if (!ts.some((t) => now - t < RATE_WINDOW_MS)) hits.delete(k);
+  }
+  const key = hits.has(rawKey) || hits.size < MAX_KEYS ? rawKey : OVERFLOW_KEY;
   const recent = (hits.get(key) ?? []).filter((t) => now - t < RATE_WINDOW_MS);
   if (recent.length >= RATE_LIMIT) {
     hits.set(key, recent);
@@ -50,17 +57,6 @@ export function takeToken(key: string, now = Date.now()): number {
   }
   recent.push(now);
   hits.set(key, recent);
-  // 防止内存无限增长：每分钟最多清理一次过期记录；仍超过容量时淘汰最早写入的访问者
-  if (hits.size > 5_000 && now - lastSweep > 60_000) {
-    lastSweep = now;
-    for (const [k, ts] of hits) if (!ts.some((t) => now - t < RATE_WINDOW_MS)) hits.delete(k);
-  }
-  if (hits.size > MAX_KEYS) {
-    for (const k of hits.keys()) {
-      if (hits.size <= MAX_KEYS) break;
-      if (k !== key) hits.delete(k);
-    }
-  }
   return 0;
 }
 
